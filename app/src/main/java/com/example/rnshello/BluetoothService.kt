@@ -16,19 +16,24 @@ class BluetoothService {
     var outputStream: OutputStream? = null
 
     suspend fun connect(deviceAddress: String): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val adapter = BluetoothAdapter.getDefaultAdapter()
-            val device = adapter.getRemoteDevice(deviceAddress)
-            socket = device.createRfcommSocketToServiceRecord(SPP_UUID)
-            adapter.cancelDiscovery()
-            socket!!.connect()
-            inputStream = socket!!.inputStream
-            outputStream = socket!!.outputStream
-            true
-        } catch (e: Exception) {
-            e.printStackTrace()
-            false
+        val adapter = BluetoothAdapter.getDefaultAdapter()
+        val device = adapter.getRemoteDevice(deviceAddress)
+        adapter.cancelDiscovery()
+        // RNode BT SPP often rejects the first connection attempt — retry up to 3 times
+        repeat(3) { attempt ->
+            try {
+                socket?.close()
+                socket = device.createRfcommSocketToServiceRecord(SPP_UUID)
+                socket!!.connect()
+                inputStream = socket!!.inputStream
+                outputStream = socket!!.outputStream
+                return@withContext true
+            } catch (e: Exception) {
+                e.printStackTrace()
+                if (attempt < 2) Thread.sleep(1200)
+            }
         }
+        false
     }
 
     fun read(maxBytes: Int): ByteArray {

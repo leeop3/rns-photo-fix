@@ -281,10 +281,16 @@ class MainActivity : AppCompatActivity() {
                 }
                 toast("BT connected. Starting RNS...")
                 val addr = withContext(Dispatchers.IO) {
-                    RNSBridge.start(btService)
+                    try {
+                        RNSBridge.start(btService)
+                    } catch (e: Exception) {
+                        "Error: ${e.javaClass.simpleName}: ${e.message}"
+                    }
                 }
-                if (addr.startsWith("Error")) {
-                    toast("RNS error: $addr")
+                android.util.Log.e("RNSBridge", "start() returned: $addr")
+                if (addr.startsWith("Error") || addr.startsWith("error")) {
+                    toast("RNS error: ${addr.take(80)}")
+                    android.util.Log.e("RNSBridge", "Full error: $addr")
                     btnConnect.isEnabled = true
                 } else {
                     tvMyAddress.text = "My address: $addr"
