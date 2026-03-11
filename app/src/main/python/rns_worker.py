@@ -128,7 +128,7 @@ class AndroidBTInterface(Interface):
                     if self._kiss_buf[0] == CMD_DATA:
                         data = bytes(self._kiss_buf[1:])
                         self.rxb += len(data)
-                        self.owner.inbound(data, self)
+                        RNS.Transport.inbound(data, self)
                 self._kiss_buf = []
                 self._in_frame = True
                 self._escape   = False
