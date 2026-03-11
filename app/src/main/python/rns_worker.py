@@ -221,8 +221,21 @@ def send_hello(dest_hash_hex):
         return "Not connected"
     try:
         dest_hash = bytes.fromhex(dest_hash_hex.strip())
+
+        # Create a proper RNS Destination from just the hash
+        # This is how LXMF internally resolves destinations by hash
+        lxmf_dest = RNS.Destination(
+            None,
+            RNS.Destination.OUT,
+            RNS.Destination.SINGLE,
+            "lxmf",
+            "delivery"
+        )
+        lxmf_dest.hash = dest_hash
+        lxmf_dest.hexhash = dest_hash_hex.strip().lower()
+
         msg = LXMF.LXMessage(
-            dest_hash,
+            lxmf_dest,
             destination,
             "Hello World",
             title="Hello",
@@ -233,7 +246,7 @@ def send_hello(dest_hash_hex):
     except Exception as e:
         import traceback
         return f"Error: {traceback.format_exc()}"
-
 def get_address():
     global destination
     return RNS.prettyhexrep(destination.hash) if destination else "Not initialized"
+
