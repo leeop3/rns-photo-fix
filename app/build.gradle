@@ -5,13 +5,13 @@ plugins {
 }
 
 android {
-    compileSdk 34
+    compileSdk 35
     namespace "com.example.rnshello"
 
     defaultConfig {
         applicationId "com.example.rnshello"
         minSdk 26
-        targetSdk 34
+        targetSdk 35
         versionCode 1
         versionName "1.0"
 
@@ -20,6 +20,7 @@ android {
         }
 
         python {
+            buildPython "python3"
             pip {
                 install "rns"
                 install "lxmf"
