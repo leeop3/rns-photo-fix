@@ -18,6 +18,7 @@ _start_result = {"addr": None, "error": None}
 # Shared state
 chat_messages = []
 seen_announces = []
+known_identities = {}  # hash_hex -> RNS.Identity, populated from announces
 
 RNS_CONFIG = """
 [reticulum]
@@ -162,6 +163,7 @@ def message_received(message):
     chat_messages.append(entry)
 
 def announce_received(destination_hash, announced_identity, app_data):
+    global known_identities
     hash_str = RNS.prettyhexrep(destination_hash)
     name = ""
     if app_data:
@@ -171,6 +173,10 @@ def announce_received(destination_hash, announced_identity, app_data):
             name = str(app_data)
     ts = time.strftime("%H:%M:%S")
     RNS.log(f"ANNOUNCE from {hash_str} name={name}")
+    # Store the identity so we can send to this peer
+    if announced_identity is not None:
+        known_identities[hash_str] = announced_identity
+        RNS.log(f"Identity stored for {hash_str}")
     entry = {"hash": hash_str, "name": name, "ts": ts}
     for i, a in enumerate(seen_announces):
         if a["hash"] == hash_str:
@@ -251,30 +257,36 @@ def start(bt_socket_wrapper):
     return _start_result["addr"] or "Timeout"
 
 def send_message(dest_hash_hex, text):
-    global lxmf_router, destination
+    global lxmf_router, destination, known_identities
     if not lxmf_router or not destination:
         return "Not connected"
     try:
-        dest_hash = bytes.fromhex(dest_hash_hex.strip())
+        dest_hash_hex = dest_hash_hex.strip()
+        dest_hash = bytes.fromhex(dest_hash_hex)
         RNS.log(f"Sending to {dest_hash_hex}: {text}")
 
-        # Step 1: check if we know this identity
-        recalled_identity = RNS.Identity.recall(dest_hash)
-        RNS.log(f"Identity recall result: {recalled_identity}")
+        # Step 1: get identity - prefer from announce cache, fallback to recall
+        recalled_identity = known_identities.get(dest_hash_hex)
+        if recalled_identity is None:
+            recalled_identity = RNS.Identity.recall(dest_hash)
+            RNS.log(f"Identity recall result: {recalled_identity}")
+        else:
+            RNS.log(f"Using cached identity for {dest_hash_hex}")
 
         if recalled_identity is None:
-            # Request path and wait
-            RNS.log("Requesting path...")
+            RNS.log("No identity known, requesting path and waiting...")
             RNS.Transport.request_path(dest_hash)
             for i in range(15):
                 time.sleep(2)
-                recalled_identity = RNS.Identity.recall(dest_hash)
+                recalled_identity = known_identities.get(dest_hash_hex)
+                if recalled_identity is None:
+                    recalled_identity = RNS.Identity.recall(dest_hash)
                 if recalled_identity is not None:
                     RNS.log(f"Got identity after {(i+1)*2}s")
                     break
 
         if recalled_identity is None:
-            return "Cannot reach destination - make sure they are on air and have announced"
+            return "No identity known for destination. Have they announced recently?"
 
         # Step 2: build LXMF destination
         lxmf_dest = RNS.Destination(
@@ -284,27 +296,19 @@ def send_message(dest_hash_hex, text):
             "lxmf",
             "delivery"
         )
-        RNS.log(f"Destination hash: {RNS.prettyhexrep(lxmf_dest.hash)}")
+        RNS.log(f"LXMF dest hash: {RNS.prettyhexrep(lxmf_dest.hash)}")
 
-        # Step 3: check if path is known, if not request it
+        # Step 3: send — DIRECT if path known, else PROPAGATED fallback
+        method = LXMF.LXMessage.DIRECT
         if not RNS.Transport.has_path(lxmf_dest.hash):
-            RNS.log("No path yet, requesting...")
-            RNS.Transport.request_path(lxmf_dest.hash)
-            for i in range(15):
-                time.sleep(2)
-                if RNS.Transport.has_path(lxmf_dest.hash):
-                    RNS.log(f"Path found after {(i+1)*2}s")
-                    break
-            if not RNS.Transport.has_path(lxmf_dest.hash):
-                RNS.log("No path found, trying anyway...")
+            RNS.log("No path, will try DIRECT anyway (single-hop LoRa)")
 
-        # Step 4: send message
         msg = LXMF.LXMessage(
             lxmf_dest,
             destination,
             text,
             title="",
-            desired_method=LXMF.LXMessage.DIRECT
+            desired_method=method
         )
         msg.register_delivery_callback(lambda m: RNS.log(f"Delivered! state={m.state}"))
         msg.register_failed_callback(lambda m: RNS.log(f"Failed! state={m.state}"))
