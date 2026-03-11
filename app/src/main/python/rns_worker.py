@@ -1,12 +1,13 @@
 import RNS
 import LXMF
 import threading
-
-# In RNS 1.x, Interface must be imported directly from the module
+import time
 from RNS.Interfaces.Interface import Interface
 
 destination = None
 lxmf_router = None
+_start_done = threading.Event()
+_start_result = {"addr": None, "error": None}
 
 class AndroidBTInterface(Interface):
     BITRATE_GUESS = 9600
@@ -46,30 +47,47 @@ class AndroidBTInterface(Interface):
 def message_received(message):
     RNS.log(f"MSG from {RNS.prettyhexrep(message.source_hash)}: {message.content_as_string()}")
 
-def start(bt_socket_wrapper):
+def _rns_main(bt_socket_wrapper):
+    """Runs in its own thread so signal handling works correctly."""
     global destination, lxmf_router
+    try:
+        reticulum = RNS.Reticulum(configdir=None, loglevel=RNS.LOG_DEBUG)
 
-    reticulum = RNS.Reticulum(configdir=None, loglevel=RNS.LOG_DEBUG)
+        iface = AndroidBTInterface(reticulum, "RNodeBT", bt_socket_wrapper)
+        RNS.Transport.interfaces.append(iface)
 
-    # Create and register interface with correct owner argument
-    iface = AndroidBTInterface(reticulum, "RNodeBT", bt_socket_wrapper)
-    RNS.Transport.interfaces.append(iface)
+        identity = RNS.Identity()
+        lxmf_router = LXMF.LXMRouter(
+            storagepath="/data/data/com.example.rnshello/files/lxmf",
+            autopeer=True
+        )
+        destination = lxmf_router.register_delivery_identity(
+            identity,
+            display_name="RNS Hello Android"
+        )
+        lxmf_router.register_delivery_callback(message_received)
+        destination.announce()
 
-    identity = RNS.Identity()
-    lxmf_router = LXMF.LXMRouter(
-        storagepath="/data/data/com.example.rnshello/files/lxmf",
-        autopeer=True
-    )
-    destination = lxmf_router.register_delivery_identity(
-        identity,
-        display_name="RNS Hello Android"
-    )
-    lxmf_router.register_delivery_callback(message_received)
-    destination.announce()
+        addr = RNS.prettyhexrep(destination.hash)
+        RNS.log(f"LXMF address: {addr}")
+        _start_result["addr"] = addr
 
-    addr = RNS.prettyhexrep(destination.hash)
-    RNS.log(f"LXMF address: {addr}")
-    return addr
+    except Exception as e:
+        RNS.log(f"RNS start error: {e}")
+        _start_result["error"] = str(e)
+    finally:
+        _start_done.set()
+
+def start(bt_socket_wrapper):
+    """Called from Kotlin - launches RNS in its own thread and waits for result."""
+    _start_done.clear()
+    t = threading.Thread(target=_rns_main, args=(bt_socket_wrapper,), daemon=True)
+    t.start()
+    # Wait up to 30 seconds for RNS to initialise
+    _start_done.wait(timeout=30)
+    if _start_result["error"]:
+        return f"Error: {_start_result['error']}"
+    return _start_result["addr"] or "Timeout - RNS did not start"
 
 def send_hello(dest_hash_hex):
     global lxmf_router, destination
