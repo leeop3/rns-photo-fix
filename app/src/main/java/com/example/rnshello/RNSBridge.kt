@@ -7,8 +7,10 @@ object RNSBridge {
     private val py = Python.getInstance()
     private val worker get() = py.getModule("rns_worker")
 
-    fun start(socketWrapper: PyObject): String {
-        return worker.callAttr("start", socketWrapper).toString()
+    fun start(btService: BluetoothService): String {
+        // Wrap the Kotlin BluetoothService as a Python-callable object
+        val pyBtWrapper = py.getModule("bt_wrapper").callAttr("BtWrapper", btService)
+        return worker.callAttr("start", pyBtWrapper).toString()
     }
 
     fun sendMessage(destHashHex: String, text: String): String {
@@ -22,10 +24,9 @@ object RNSBridge {
     fun getMessages(): List<Map<String, String>> {
         val raw = worker.callAttr("get_messages")
         val result = mutableListOf<Map<String, String>>()
-        for (i in 0 until raw.asList().size) {
-            val item = raw.asList()[i].asMap()
+        for (item in raw.asList()) {
             val map = mutableMapOf<String, String>()
-            for ((k, v) in item) {
+            for ((k, v) in item.asMap()) {
                 map[k.toString()] = v.toString()
             }
             result.add(map)
@@ -36,10 +37,9 @@ object RNSBridge {
     fun getAnnounces(): List<Map<String, String>> {
         val raw = worker.callAttr("get_announces")
         val result = mutableListOf<Map<String, String>>()
-        for (i in 0 until raw.asList().size) {
-            val item = raw.asList()[i].asMap()
+        for (item in raw.asList()) {
             val map = mutableMapOf<String, String>()
-            for ((k, v) in item) {
+            for ((k, v) in item.asMap()) {
                 map[k.toString()] = v.toString()
             }
             result.add(map)

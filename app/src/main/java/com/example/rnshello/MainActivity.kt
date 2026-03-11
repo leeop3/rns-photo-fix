@@ -1,7 +1,6 @@
 package com.example.rnshello
 
 import android.Manifest
-import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -17,6 +16,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
+import kotlinx.coroutines.*
 
 class MainActivity : AppCompatActivity() {
 
@@ -38,6 +38,8 @@ class MainActivity : AppCompatActivity() {
     private var refreshRunnable: Runnable? = null
     private var lastMessageCount = 0
     private var lastAnnounceCount = 0
+    private val btService = BluetoothService()
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,10 +72,10 @@ class MainActivity : AppCompatActivity() {
             if (dest.isEmpty()) { toast("Enter a destination address"); return@setOnClickListener }
             if (text.isEmpty()) { toast("Enter a message"); return@setOnClickListener }
             etMessage.setText("")
-            Thread {
+            scope.launch(Dispatchers.IO) {
                 val result = RNSBridge.sendMessage(dest, text)
-                runOnUiThread { toast(result); refreshMessages() }
-            }.start()
+                withContext(Dispatchers.Main) { toast(result); refreshMessages() }
+            }
         }
 
         requestPermissions()
@@ -152,16 +154,15 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (!isOutgoing) {
-            val fromTv = TextView(this).apply {
+            wrapper.addView(TextView(this).apply {
                 this.text = from
                 textSize = 9f
                 setTextColor(Color.parseColor("#00d4ff"))
                 typeface = android.graphics.Typeface.MONOSPACE
-            }
-            wrapper.addView(fromTv)
+            })
         }
 
-        val bubble = TextView(this).apply {
+        wrapper.addView(TextView(this).apply {
             this.text = text
             textSize = 14f
             setTextColor(Color.WHITE)
@@ -170,13 +171,10 @@ class MainActivity : AppCompatActivity() {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { lp ->
-                lp.gravity = if (isOutgoing) Gravity.END else Gravity.START
-            }
-        }
-        wrapper.addView(bubble)
+            ).also { lp -> lp.gravity = if (isOutgoing) Gravity.END else Gravity.START }
+        })
 
-        val tsTv = TextView(this).apply {
+        wrapper.addView(TextView(this).apply {
             this.text = ts
             textSize = 9f
             setTextColor(Color.GRAY)
@@ -184,12 +182,13 @@ class MainActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).also { it.gravity = if (isOutgoing) Gravity.END else Gravity.START }
-        }
-        wrapper.addView(tsTv)
+        })
+
         chatContainer.addView(wrapper)
     }
 
     private fun addAnnounceCard(hash: String, name: String, ts: String) {
+        val cleanHash = hash.replace("<", "").replace(">", "")
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(16, 12, 16, 12)
@@ -199,36 +198,27 @@ class MainActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).also { it.setMargins(0, 4, 0, 4) }
         }
-
-        val nameTv = TextView(this).apply {
+        card.addView(TextView(this).apply {
             this.text = if (name.isNotEmpty()) name else "Unknown node"
             textSize = 14f
             setTextColor(Color.WHITE)
-        }
-        card.addView(nameTv)
-
-        val cleanHash = hash.replace("<", "").replace(">", "")
-        val hashTv = TextView(this).apply {
+        })
+        card.addView(TextView(this).apply {
             this.text = cleanHash
             textSize = 10f
             setTextColor(Color.parseColor("#00d4ff"))
             typeface = android.graphics.Typeface.MONOSPACE
-        }
-        card.addView(hashTv)
-
-        val tsTv = TextView(this).apply {
+        })
+        card.addView(TextView(this).apply {
             this.text = "Seen at $ts"
             textSize = 9f
             setTextColor(Color.GRAY)
-        }
-        card.addView(tsTv)
-
+        })
         card.setOnClickListener {
             etDestHash.setText(cleanHash)
             showTab("chat")
-            toast("Address copied - tap Send to message them")
+            toast("Address copied - type a message and tap Send")
         }
-
         announcesContainer.addView(card)
     }
 
@@ -277,38 +267,38 @@ class MainActivity : AppCompatActivity() {
             val idx = spinnerDevices.selectedItemPosition
             if (idx < 0 || idx >= paired.size) return@setOnClickListener
             val device = paired[idx]
-            toast("Connecting to ${device.address}...")
             btnConnect.isEnabled = false
-            Thread {
-                BluetoothService.connect(device) { socketWrapper, error ->
-                    runOnUiThread {
-                        if (error != null) {
-                            toast("BT error: $error")
-                            btnConnect.isEnabled = true
-                        } else {
-                            toast("BT connected. Starting RNS...")
-                            Thread {
-                                val addr = RNSBridge.start(socketWrapper!!)
-                                runOnUiThread {
-                                    if (addr.startsWith("Error")) {
-                                        toast("RNS error: $addr")
-                                        btnConnect.isEnabled = true
-                                    } else {
-                                        tvMyAddress.text = "My address: $addr"
-                                        toast("Ready! Address: $addr")
-                                        startPolling()
-                                    }
-                                }
-                            }.start()
-                        }
-                    }
+            toast("Connecting to ${device.address}...")
+
+            scope.launch {
+                val connected = withContext(Dispatchers.IO) {
+                    btService.connect(device.address)
                 }
-            }.start()
+                if (!connected) {
+                    toast("BT connection failed")
+                    btnConnect.isEnabled = true
+                    return@launch
+                }
+                toast("BT connected. Starting RNS...")
+                val addr = withContext(Dispatchers.IO) {
+                    RNSBridge.start(btService)
+                }
+                if (addr.startsWith("Error")) {
+                    toast("RNS error: $addr")
+                    btnConnect.isEnabled = true
+                } else {
+                    tvMyAddress.text = "My address: $addr"
+                    toast("Ready!")
+                    startPolling()
+                }
+            }
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         refreshRunnable?.let { handler.removeCallbacks(it) }
+        scope.cancel()
+        btService.disconnect()
     }
 }
