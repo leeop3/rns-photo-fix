@@ -222,31 +222,37 @@ def send_hello(dest_hash_hex):
     try:
         dest_hash = bytes.fromhex(dest_hash_hex.strip())
 
-        # Create a proper RNS Destination from just the hash
-        # This is how LXMF internally resolves destinations by hash
+        # Recall the identity from RNS - will work if their announce was received
+        recalled_identity = RNS.Identity.recall(dest_hash)
+
+        if recalled_identity is None:
+            # Announce not yet received - send a path request and tell user to wait
+            RNS.Transport.request_path(dest_hash)
+            return "Path requested - wait 15s for their announce then try again"
+
+        # Build proper outbound LXMF destination with the recalled identity
         lxmf_dest = RNS.Destination(
-            None,
+            recalled_identity,
             RNS.Destination.OUT,
             RNS.Destination.SINGLE,
             "lxmf",
             "delivery"
         )
-        lxmf_dest.hash = dest_hash
-        lxmf_dest.hexhash = dest_hash_hex.strip().lower()
 
         msg = LXMF.LXMessage(
             lxmf_dest,
             destination,
             "Hello World",
             title="Hello",
-            desired_method=LXMF.LXMessage.PROPAGATED
+            desired_method=LXMF.LXMessage.DIRECT
         )
         lxmf_router.handle_outbound(msg)
         return "Sent!"
+
     except Exception as e:
         import traceback
         return f"Error: {traceback.format_exc()}"
+
 def get_address():
     global destination
     return RNS.prettyhexrep(destination.hash) if destination else "Not initialized"
-
