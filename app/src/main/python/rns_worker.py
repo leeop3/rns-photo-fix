@@ -1,11 +1,13 @@
 import RNS
 import LXMF
 import threading
-import time
+import signal
 from RNS.Interfaces.Interface import Interface
 
 destination = None
 lxmf_router = None
+reticulum = None
+_rns_started = False
 _start_done = threading.Event()
 _start_result = {"addr": None, "error": None}
 
@@ -48,10 +50,13 @@ def message_received(message):
     RNS.log(f"MSG from {RNS.prettyhexrep(message.source_hash)}: {message.content_as_string()}")
 
 def _rns_main(bt_socket_wrapper):
-    """Runs in its own thread so signal handling works correctly."""
-    global destination, lxmf_router
+    global destination, lxmf_router, reticulum
+
     try:
-        reticulum = RNS.Reticulum(configdir=None, loglevel=RNS.LOG_DEBUG)
+        # Disable signal handling in RNS so it works outside main thread
+        import unittest.mock as mock
+        with mock.patch("signal.signal", lambda *a, **k: None):
+            reticulum = RNS.Reticulum(configdir=None, loglevel=RNS.LOG_DEBUG)
 
         iface = AndroidBTInterface(reticulum, "RNodeBT", bt_socket_wrapper)
         RNS.Transport.interfaces.append(iface)
@@ -79,15 +84,26 @@ def _rns_main(bt_socket_wrapper):
         _start_done.set()
 
 def start(bt_socket_wrapper):
-    """Called from Kotlin - launches RNS in its own thread and waits for result."""
+    global _rns_started
+
+    # Only ever start RNS once per app lifecycle
+    if _rns_started:
+        if destination:
+            return RNS.prettyhexrep(destination.hash)
+        return "Error: RNS already started but no address yet"
+
+    _rns_started = True
     _start_done.clear()
+    _start_result["addr"] = None
+    _start_result["error"] = None
+
     t = threading.Thread(target=_rns_main, args=(bt_socket_wrapper,), daemon=True)
     t.start()
-    # Wait up to 30 seconds for RNS to initialise
     _start_done.wait(timeout=30)
+
     if _start_result["error"]:
         return f"Error: {_start_result['error']}"
-    return _start_result["addr"] or "Timeout - RNS did not start"
+    return _start_result["addr"] or "Timeout - RNS did not start in 30s"
 
 def send_hello(dest_hash_hex):
     global lxmf_router, destination
