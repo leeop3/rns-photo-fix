@@ -15,10 +15,9 @@ _rns_started = False
 _start_done = threading.Event()
 _start_result = {"addr": None, "error": None}
 
-# Shared state accessible from Kotlin
-chat_messages = []       # list of dicts: {from, text, ts}
-seen_announces = []      # list of dicts: {hash, name, ts}
-_listeners = []          # callback functions registered from Kotlin
+# Shared state
+chat_messages = []
+seen_announces = []
 
 RNS_CONFIG = """
 [reticulum]
@@ -153,21 +152,13 @@ class AndroidBTInterface(Interface):
 
     process_outgoing = processOutgoing
 
-def _notify_ui(event, data):
-    for cb in _listeners:
-        try:
-            cb(event, data)
-        except Exception as e:
-            RNS.log(f"Listener error: {e}")
-
 def message_received(message):
     sender = RNS.prettyhexrep(message.source_hash)
     text = message.content_as_string()
     ts = time.strftime("%H:%M:%S")
-    RNS.log(f"MSG from {sender}: {text}")
+    RNS.log(f"MSG RECEIVED from {sender}: {text}")
     entry = {"from": sender, "text": text, "ts": ts, "direction": "in"}
     chat_messages.append(entry)
-    _notify_ui("message", entry)
 
 def announce_received(destination_hash, announced_identity, app_data):
     hash_str = RNS.prettyhexrep(destination_hash)
@@ -178,16 +169,19 @@ def announce_received(destination_hash, announced_identity, app_data):
         except:
             name = str(app_data)
     ts = time.strftime("%H:%M:%S")
-    RNS.log(f"Announce from {hash_str} name={name}")
+    RNS.log(f"ANNOUNCE from {hash_str} name={name}")
     entry = {"hash": hash_str, "name": name, "ts": ts}
-    # Avoid duplicates - update if already seen
     for i, a in enumerate(seen_announces):
         if a["hash"] == hash_str:
             seen_announces[i] = entry
-            _notify_ui("announce", entry)
             return
     seen_announces.append(entry)
-    _notify_ui("announce", entry)
+
+class AnnounceHandler:
+    aspect_filter = None  # catch all announces
+
+    def received_announce(self, destination_hash, announced_identity, app_data):
+        announce_received(destination_hash, announced_identity, app_data)
 
 def _noop_signal(sig, handler):
     pass
@@ -224,8 +218,6 @@ def _rns_main(bt_socket_wrapper):
             display_name="RNS Hello Android"
         )
         lxmf_router.register_delivery_callback(message_received)
-
-        # Register announce handler to catch all LXMF announces on the network
         RNS.Transport.register_announce_handler(AnnounceHandler())
 
         destination.announce()
@@ -240,13 +232,6 @@ def _rns_main(bt_socket_wrapper):
         _start_result["error"] = str(e)
     finally:
         _start_done.set()
-
-class AnnounceHandler:
-    """Catches all announces on the network regardless of app."""
-    aspect_filter = None  # None = catch everything
-
-    def received_announce(self, destination_hash, announced_identity, app_data):
-        announce_received(destination_hash, announced_identity, app_data)
 
 def start(bt_socket_wrapper):
     global _rns_started
@@ -270,22 +255,27 @@ def send_message(dest_hash_hex, text):
         return "Not connected"
     try:
         dest_hash = bytes.fromhex(dest_hash_hex.strip())
+        RNS.log(f"Sending to {dest_hash_hex}: {text}")
+
+        # Step 1: check if we know this identity
         recalled_identity = RNS.Identity.recall(dest_hash)
+        RNS.log(f"Identity recall result: {recalled_identity}")
 
         if recalled_identity is None:
-            RNS.log("Identity not known, requesting path...")
+            # Request path and wait
+            RNS.log("Requesting path...")
             RNS.Transport.request_path(dest_hash)
-            waited = 0
-            while waited < 30:
+            for i in range(15):
                 time.sleep(2)
-                waited += 2
                 recalled_identity = RNS.Identity.recall(dest_hash)
                 if recalled_identity is not None:
+                    RNS.log(f"Got identity after {(i+1)*2}s")
                     break
 
         if recalled_identity is None:
-            return "Could not find destination - is the other node on air?"
+            return "Cannot reach destination - make sure they are on air and have announced"
 
+        # Step 2: build LXMF destination
         lxmf_dest = RNS.Destination(
             recalled_identity,
             RNS.Destination.OUT,
@@ -293,7 +283,21 @@ def send_message(dest_hash_hex, text):
             "lxmf",
             "delivery"
         )
+        RNS.log(f"Destination hash: {RNS.prettyhexrep(lxmf_dest.hash)}")
 
+        # Step 3: check if path is known, if not request it
+        if not RNS.Transport.has_path(lxmf_dest.hash):
+            RNS.log("No path yet, requesting...")
+            RNS.Transport.request_path(lxmf_dest.hash)
+            for i in range(15):
+                time.sleep(2)
+                if RNS.Transport.has_path(lxmf_dest.hash):
+                    RNS.log(f"Path found after {(i+1)*2}s")
+                    break
+            if not RNS.Transport.has_path(lxmf_dest.hash):
+                RNS.log("No path found, trying anyway...")
+
+        # Step 4: send message
         msg = LXMF.LXMessage(
             lxmf_dest,
             destination,
@@ -301,19 +305,19 @@ def send_message(dest_hash_hex, text):
             title="",
             desired_method=LXMF.LXMessage.DIRECT
         )
+        msg.register_delivery_callback(lambda m: RNS.log(f"Delivered! state={m.state}"))
+        msg.register_failed_callback(lambda m: RNS.log(f"Failed! state={m.state}"))
         lxmf_router.handle_outbound(msg)
 
         ts = time.strftime("%H:%M:%S")
-        entry = {"from": "me", "text": text, "ts": ts, "direction": "out",
-                 "to": dest_hash_hex.strip()}
-        chat_messages.append(entry)
-        _notify_ui("message", entry)
-
+        chat_messages.append({"from": "me", "text": text, "ts": ts, "direction": "out"})
         return "Sent!"
 
     except Exception as e:
         import traceback
-        return f"Error: {traceback.format_exc()}"
+        err = traceback.format_exc()
+        RNS.log(f"send_message error: {err}")
+        return f"Error: {e}"
 
 def get_messages():
     return list(chat_messages)
@@ -324,6 +328,3 @@ def get_announces():
 def get_address():
     global destination
     return RNS.prettyhexrep(destination.hash) if destination else "Not initialized"
-
-def register_listener(callback):
-    _listeners.append(callback)
