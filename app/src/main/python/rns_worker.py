@@ -6,6 +6,7 @@ import os
 import time
 import struct
 from RNS.Interfaces.Interface import Interface
+from collections import deque
 
 destination = None
 lxmf_router = None
@@ -26,7 +27,6 @@ RNS_CONFIG = """
 
 """
 
-# RNode KISS constants
 KISS_FEND  = 0xC0
 KISS_FESC  = 0xDB
 KISS_TFEND = 0xDC
@@ -95,10 +95,16 @@ class AndroidBTInterface(Interface):
         self.held_announces         = {}
         self.announced_identity     = None
         self.mode                   = Interface.MODE_FULL
+        self.oa_freq_deque          = deque(maxlen=16)
+        self.ifac_size              = None
+        self.ifac_netkey            = None
+        self.ifac_key               = None
+        self.ifac_identity          = None
+        self.ifac_signature         = None
+        self.online                 = True
         self._kiss_buf              = []
         self._in_frame              = False
         self._escape                = False
-        self.online                 = True
         threading.Thread(target=self._read_loop, daemon=True).start()
 
     def _read_loop(self):
@@ -156,7 +162,6 @@ def _rns_main(bt_socket_wrapper):
         with open(os.path.join(configdir, "config"), "w") as f:
             f.write(RNS_CONFIG)
 
-        # Patch signal for BOTH RNS and LXMF before either starts
         original_signal = signal.signal
         signal.signal = _noop_signal
 
@@ -167,13 +172,11 @@ def _rns_main(bt_socket_wrapper):
 
         identity = RNS.Identity()
 
-        # LXMF also calls signal.signal - still patched here so it works
         lxmf_router = LXMF.LXMRouter(
             storagepath="/data/data/com.example.rnshello/files/lxmf",
             autopeer=True
         )
 
-        # Restore signal only after both RNS and LXMF are fully initialised
         signal.signal = original_signal
 
         destination = lxmf_router.register_delivery_identity(
@@ -215,10 +218,13 @@ def send_hello(dest_hash_hex):
     if not lxmf_router or not destination:
         return "Not connected"
     try:
+        # Build destination object from hash
+        dest_hash = bytes.fromhex(dest_hash_hex)
+        lxmf_dest = RNS.Destination.recall(dest_hash)
         msg = LXMF.LXMessage(
-            destination_hash=bytes.fromhex(dest_hash_hex),
-            source=destination,
-            content="Hello World",
+            lxmf_dest,
+            destination,
+            "Hello World",
             title="Hello",
             desired_method=LXMF.LXMessage.DIRECT
         )
