@@ -46,4 +46,18 @@ object RNSBridge {
         }
         return result
     }
+
+    fun setContact(hashHex: String, name: String): String {
+        return try {
+            worker.callAttr("set_contact", hashHex, name).toString()
+        } catch (e: Exception) {
+            "Error: ${e.message}"
+        }
+    }
+
+    fun getContact(hashHex: String): String {
+        return try {
+            worker.callAttr("get_contact", hashHex).toString()
+        } catch (e: Exception) { "" }
+    }
 }

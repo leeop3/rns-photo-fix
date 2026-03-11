@@ -121,7 +121,7 @@ class MainActivity : AppCompatActivity() {
             chatContainer.removeAllViews()
             for (msg in messages) {
                 addChatBubble(
-                    msg["from"] ?: "",
+                    msg["display_from"] ?: msg["from"] ?: "",
                     msg["text"] ?: "",
                     msg["ts"] ?: "",
                     msg["direction"] == "out"
@@ -138,7 +138,7 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread {
             announcesContainer.removeAllViews()
             for (ann in announces.reversed()) {
-                addAnnounceCard(ann["hash"] ?: "", ann["name"] ?: "", ann["ts"] ?: "")
+                addAnnounceCard(ann["hash"] ?: "", ann["display"] ?: ann["name"] ?: "", ann["ts"] ?: "")
             }
         }
     }
@@ -219,6 +219,26 @@ class MainActivity : AppCompatActivity() {
             showTab("chat")
             toast("Address copied - type a message and tap Send")
         }
+        card.setOnLongClickListener {
+            val input = android.widget.EditText(this)
+            val currentName = RNSBridge.getContact(cleanHash)
+            input.setText(currentName)
+            input.hint = "Enter nickname (blank to clear)"
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Set nickname")
+                .setMessage(cleanHash)
+                .setView(input)
+                .setPositiveButton("Save") { _, _ ->
+                    val nick = input.text.toString()
+                    RNSBridge.setContact(cleanHash, nick)
+                    toast(if (nick.isBlank()) "Nickname cleared" else "Saved: $nick")
+                    lastAnnounceCount = 0  // force UI refresh
+                    refreshAnnounces()
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+            true
+        }
         announcesContainer.addView(card)
     }
 
@@ -281,16 +301,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 toast("BT connected. Starting RNS...")
                 val addr = withContext(Dispatchers.IO) {
-                    try {
-                        RNSBridge.start(btService)
-                    } catch (e: Exception) {
-                        "Error: ${e.javaClass.simpleName}: ${e.message}"
-                    }
+                    RNSBridge.start(btService)
                 }
-                android.util.Log.e("RNSBridge", "start() returned: $addr")
-                if (addr.startsWith("Error") || addr.startsWith("error")) {
-                    toast("RNS error: ${addr.take(80)}")
-                    android.util.Log.e("RNSBridge", "Full error: $addr")
+                if (addr.startsWith("Error")) {
+                    toast("RNS error: $addr")
                     btnConnect.isEnabled = true
                 } else {
                     tvMyAddress.text = "My address: $addr"

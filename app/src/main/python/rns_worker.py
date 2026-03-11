@@ -19,6 +19,43 @@ _start_result = {"addr": None, "error": None}
 chat_messages = []
 seen_announces = []
 known_identities = {}  # hash_hex -> RNS.Identity, populated from announces
+contacts = {}  # hash_hex -> nickname string, persisted to disk
+
+CONTACTS_PATH = "/data/data/com.example.rnshello/files/contacts.json"
+
+def load_contacts():
+    global contacts
+    try:
+        import json
+        if os.path.exists(CONTACTS_PATH):
+            with open(CONTACTS_PATH, "r") as f:
+                contacts = json.load(f)
+            RNS.log(f"Loaded {len(contacts)} contacts")
+    except Exception as e:
+        RNS.log(f"Could not load contacts: {e}")
+        contacts = {}
+
+def save_contacts():
+    try:
+        import json
+        with open(CONTACTS_PATH, "w") as f:
+            json.dump(contacts, f)
+    except Exception as e:
+        RNS.log(f"Could not save contacts: {e}")
+
+def set_contact(hash_hex, name):
+    global contacts
+    hash_hex = hash_hex.strip().replace("<", "").replace(">", "")
+    if name.strip():
+        contacts[hash_hex] = name.strip()
+    else:
+        contacts.pop(hash_hex, None)  # empty name = delete contact
+    save_contacts()
+    return "OK"
+
+def get_contact(hash_hex):
+    hash_hex = hash_hex.strip().replace("<", "").replace(">", "")
+    return contacts.get(hash_hex, "")
 
 RNS_CONFIG = """
 [reticulum]
@@ -205,19 +242,32 @@ def _rns_main(bt_socket_wrapper):
         original_signal = signal.signal
         signal.signal = _noop_signal
 
+        load_contacts()
         reticulum = RNS.Reticulum(configdir=configdir, loglevel=RNS.LOG_DEBUG)
 
         iface = AndroidBTInterface(RNS.Transport, "RNodeBT", bt_socket_wrapper)
         RNS.Transport.interfaces.append(iface)
 
         identity_path = "/data/data/com.example.rnshello/files/identity"
+        identity = None
         if os.path.exists(identity_path):
-            identity = RNS.Identity.from_file(identity_path)
-            RNS.log("Loaded existing identity")
-        else:
+            try:
+                identity = RNS.Identity.from_file(identity_path)
+                if identity is not None:
+                    RNS.log(f"Loaded existing identity: {RNS.prettyhexrep(identity.hash)}")
+                else:
+                    RNS.log("from_file returned None, will recreate")
+            except Exception as e:
+                RNS.log(f"Failed to load identity: {e}, will recreate")
+                identity = None
+        if identity is None:
             identity = RNS.Identity()
-            identity.to_file(identity_path)
-            RNS.log("Created new identity")
+            try:
+                identity.to_file(identity_path)
+                RNS.log(f"Created and saved new identity: {RNS.prettyhexrep(identity.hash)}")
+            except Exception as e:
+                RNS.log(f"WARNING: Could not save identity to file: {e}")
+                RNS.log("Address will change on next restart!")
 
         lxmf_router = LXMF.LXMRouter(
             storagepath="/data/data/com.example.rnshello/files/lxmf",
@@ -331,10 +381,30 @@ def send_message(dest_hash_hex, text):
         return f"Error: {e}"
 
 def get_messages():
-    return list(chat_messages)
+    result = []
+    for m in chat_messages:
+        entry = dict(m)
+        h = entry.get("from", "").replace("<", "").replace(">", "")
+        nickname = contacts.get(h, "")
+        if nickname:
+            entry["display_from"] = nickname
+        else:
+            entry["display_from"] = entry.get("from", "")
+        result.append(entry)
+    return result
 
 def get_announces():
-    return list(seen_announces)
+    result = []
+    for a in seen_announces:
+        entry = dict(a)
+        h = entry.get("hash", "").replace("<", "").replace(">", "")
+        nickname = contacts.get(h, "")
+        if nickname:
+            entry["display"] = nickname
+        else:
+            entry["display"] = entry.get("name", "")
+        result.append(entry)
+    return result
 
 def get_address():
     global destination
