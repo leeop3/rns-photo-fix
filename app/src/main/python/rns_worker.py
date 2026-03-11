@@ -116,7 +116,6 @@ class AndroidBTInterface(Interface):
             try:
                 data = self._socket.read(512)
                 if data and len(data) > 0:
-                    self.rxb += len(data)
                     self._parse_kiss(data)
             except Exception as e:
                 RNS.log(f"BT read error: {e}")
@@ -127,7 +126,9 @@ class AndroidBTInterface(Interface):
             if byte == KISS_FEND:
                 if self._in_frame and len(self._kiss_buf) > 1:
                     if self._kiss_buf[0] == CMD_DATA:
-                        self.process_incoming(bytes(self._kiss_buf[1:]))
+                        data = bytes(self._kiss_buf[1:])
+                        self.rxb += len(data)
+                        self.owner.inbound(data, self)
                 self._kiss_buf = []
                 self._in_frame = True
                 self._escape   = False
