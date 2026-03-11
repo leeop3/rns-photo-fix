@@ -208,7 +208,7 @@ def _rns_main(bt_socket_wrapper):
         reticulum = RNS.Reticulum(configdir=configdir, loglevel=RNS.LOG_DEBUG)
 
         iface = AndroidBTInterface(RNS.Transport, "RNodeBT", bt_socket_wrapper)
-        RNS.Transport.register_interface(iface)
+        RNS.Transport.interfaces.append(iface)
 
         identity_path = "/data/data/com.example.rnshello/files/identity"
         if os.path.exists(identity_path):
