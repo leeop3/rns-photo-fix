@@ -184,7 +184,7 @@ def announce_received(destination_hash, announced_identity, app_data):
     seen_announces.append(entry)
 
 class AnnounceHandler:
-    aspect_filter = None  # catch all announces
+    aspect_filter = "lxmf.delivery"
 
     def received_announce(self, destination_hash, announced_identity, app_data):
         announce_received(destination_hash, announced_identity, app_data)
@@ -208,9 +208,16 @@ def _rns_main(bt_socket_wrapper):
         reticulum = RNS.Reticulum(configdir=configdir, loglevel=RNS.LOG_DEBUG)
 
         iface = AndroidBTInterface(RNS.Transport, "RNodeBT", bt_socket_wrapper)
-        RNS.Transport.interfaces.append(iface)
+        RNS.Transport.register_interface(iface)
 
-        identity = RNS.Identity()
+        identity_path = "/data/data/com.example.rnshello/files/identity"
+        if os.path.exists(identity_path):
+            identity = RNS.Identity.from_file(identity_path)
+            RNS.log("Loaded existing identity")
+        else:
+            identity = RNS.Identity()
+            identity.to_file(identity_path)
+            RNS.log("Created new identity")
 
         lxmf_router = LXMF.LXMRouter(
             storagepath="/data/data/com.example.rnshello/files/lxmf",
