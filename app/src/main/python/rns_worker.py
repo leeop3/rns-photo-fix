@@ -26,28 +26,19 @@ RNS_CONFIG = """
 
 """
 
-# ---------------------------------------------------------------
-# RNode KISS protocol constants
-# ---------------------------------------------------------------
-KISS_FEND         = 0xC0
-KISS_FESC         = 0xDB
-KISS_TFEND        = 0xDC
-KISS_TFESC        = 0xDD
-
-CMD_DATA          = 0x00
-CMD_FREQUENCY     = 0x01
-CMD_BANDWIDTH     = 0x02
-CMD_TXPOWER       = 0x03
-CMD_SF            = 0x04
-CMD_CR            = 0x05
-CMD_RADIO_STATE   = 0x06
-CMD_RADIO_LOCK    = 0x07
-CMD_DETECT        = 0x08
-CMD_IMPLICIT      = 0x09
-CMD_LEAVE         = 0x0A
-
-RADIO_STATE_OFF   = 0x00
-RADIO_STATE_ON    = 0x01
+# RNode KISS constants
+KISS_FEND  = 0xC0
+KISS_FESC  = 0xDB
+KISS_TFEND = 0xDC
+KISS_TFESC = 0xDD
+CMD_DATA        = 0x00
+CMD_FREQUENCY   = 0x01
+CMD_BANDWIDTH   = 0x02
+CMD_TXPOWER     = 0x03
+CMD_SF          = 0x04
+CMD_CR          = 0x05
+CMD_RADIO_STATE = 0x06
+RADIO_STATE_ON  = 0x01
 
 def kiss_escape(data):
     out = []
@@ -61,80 +52,53 @@ def kiss_escape(data):
     return bytes(out)
 
 def kiss_cmd(cmd, data=b""):
-    payload = bytes([KISS_FEND, cmd]) + kiss_escape(data) + bytes([KISS_FEND])
-    return payload
+    return bytes([KISS_FEND, cmd]) + kiss_escape(data) + bytes([KISS_FEND])
 
 def configure_rnode(socket):
-    """
-    Send RNode KISS commands to set:
-      Frequency : 433.025 MHz
-      Bandwidth : 31.25 kHz
-      TX Power  : 17 dBm
-      SF        : 8
-      CR        : 6
-    Then turn the radio ON.
-    """
     RNS.log("Configuring RNode radio parameters...")
-
-    # Frequency: 433025000 Hz as 4-byte big-endian uint32
-    freq = 433025000
-    freq_bytes = struct.pack(">I", freq)
-    socket.write(kiss_cmd(CMD_FREQUENCY, freq_bytes))
+    socket.write(kiss_cmd(CMD_FREQUENCY, struct.pack(">I", 433025000)))
     time.sleep(0.1)
-
-    # Bandwidth: 31250 Hz as 4-byte big-endian uint32
-    bw = 31250
-    bw_bytes = struct.pack(">I", bw)
-    socket.write(kiss_cmd(CMD_BANDWIDTH, bw_bytes))
+    socket.write(kiss_cmd(CMD_BANDWIDTH, struct.pack(">I", 31250)))
     time.sleep(0.1)
-
-    # TX Power: 17 dBm as single byte
     socket.write(kiss_cmd(CMD_TXPOWER, bytes([17])))
     time.sleep(0.1)
-
-    # Spreading Factor: 8
     socket.write(kiss_cmd(CMD_SF, bytes([8])))
     time.sleep(0.1)
-
-    # Coding Rate: 6 (means 4/6 in LoRa terms)
     socket.write(kiss_cmd(CMD_CR, bytes([6])))
     time.sleep(0.1)
-
-    # Turn radio ON
     socket.write(kiss_cmd(CMD_RADIO_STATE, bytes([RADIO_STATE_ON])))
     time.sleep(0.5)
-
     RNS.log("RNode radio configured and ON")
 
-
 class AndroidBTInterface(Interface):
-    BITRATE_GUESS = 1200   # ~1.2 kbps at SF8/BW31.25/CR6
+    BITRATE_GUESS = 1200
 
     def __init__(self, owner, name, socket):
-        self.name                  = name
-        self.rxb                   = 0
-        self.txb                   = 0
-        self.online                = False
-        self.IN                    = True
-        self.OUT                   = True
-        self.FWD                   = False
-        self.RPT                   = False
-        self.owner                 = owner
-        self._socket               = socket
-        self.bitrate               = self.BITRATE_GUESS
-        self.ingress_control       = False
-        self.ic_max_held_announces = 0
-        self.ic_burst_hold_time    = 0
-        self.ic_burst_freq_new     = 0
-        self.ic_burst_freq         = 0
-        self.announce_cap          = 2
-        self.announce_queue        = []
-        self.announced_identity    = None
-        self.mode                  = Interface.MODE_FULL
-        self._kiss_buf             = []
-        self._in_frame             = False
-        self._escape               = False
-        self.online                = True
+        self.name                   = name
+        self.rxb                    = 0
+        self.txb                    = 0
+        self.online                 = False
+        self.IN                     = True
+        self.OUT                    = True
+        self.FWD                    = False
+        self.RPT                    = False
+        self.owner                  = owner
+        self._socket                = socket
+        self.bitrate                = self.BITRATE_GUESS
+        self.ingress_control        = False
+        self.ic_max_held_announces  = 0
+        self.ic_burst_hold_time     = 0
+        self.ic_burst_freq_new      = 0
+        self.ic_burst_freq          = 0
+        self.announce_cap           = 2
+        self.announce_queue         = []
+        self.held_announces         = {}
+        self.announced_identity     = None
+        self.mode                   = Interface.MODE_FULL
+        self._kiss_buf              = []
+        self._in_frame              = False
+        self._escape                = False
+        self.online                 = True
         threading.Thread(target=self._read_loop, daemon=True).start()
 
     def _read_loop(self):
@@ -149,16 +113,14 @@ class AndroidBTInterface(Interface):
                 self.online = False
 
     def _parse_kiss(self, data):
-        """Parse incoming KISS-framed data and pass payloads to RNS."""
         for byte in data:
             if byte == KISS_FEND:
                 if self._in_frame and len(self._kiss_buf) > 1:
-                    # First byte is command, rest is payload
                     if self._kiss_buf[0] == CMD_DATA:
                         self.processIncoming(bytes(self._kiss_buf[1:]))
                 self._kiss_buf = []
                 self._in_frame = True
-                self._escape = False
+                self._escape   = False
             elif self._in_frame:
                 if byte == KISS_FESC:
                     self._escape = True
@@ -173,13 +135,10 @@ class AndroidBTInterface(Interface):
 
     def processOutgoing(self, data):
         try:
-            # Wrap outgoing RNS packets in KISS DATA frame
-            frame = kiss_cmd(CMD_DATA, data)
-            self._socket.write(frame)
+            self._socket.write(kiss_cmd(CMD_DATA, data))
             self.txb += len(data)
         except Exception as e:
             RNS.log(f"BT write error: {e}")
-
 
 def message_received(message):
     RNS.log(f"MSG from {RNS.prettyhexrep(message.source_hash)}: {message.content_as_string()}")
@@ -190,7 +149,6 @@ def _noop_signal(sig, handler):
 def _rns_main(bt_socket_wrapper):
     global destination, lxmf_router, reticulum
     try:
-        # Configure RNode radio FIRST before starting RNS
         configure_rnode(bt_socket_wrapper)
 
         configdir = "/data/data/com.example.rnshello/files/.reticulum"
@@ -198,19 +156,26 @@ def _rns_main(bt_socket_wrapper):
         with open(os.path.join(configdir, "config"), "w") as f:
             f.write(RNS_CONFIG)
 
+        # Patch signal for BOTH RNS and LXMF before either starts
         original_signal = signal.signal
         signal.signal = _noop_signal
+
         reticulum = RNS.Reticulum(configdir=configdir, loglevel=RNS.LOG_DEBUG)
-        signal.signal = original_signal
 
         iface = AndroidBTInterface(reticulum, "RNodeBT", bt_socket_wrapper)
         RNS.Transport.interfaces.append(iface)
 
         identity = RNS.Identity()
+
+        # LXMF also calls signal.signal - still patched here so it works
         lxmf_router = LXMF.LXMRouter(
             storagepath="/data/data/com.example.rnshello/files/lxmf",
             autopeer=True
         )
+
+        # Restore signal only after both RNS and LXMF are fully initialised
+        signal.signal = original_signal
+
         destination = lxmf_router.register_delivery_identity(
             identity,
             display_name="RNS Hello Android"
