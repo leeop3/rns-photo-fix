@@ -7,12 +7,19 @@ lxmf_router = None
 
 class AndroidBTInterface(RNS.Interfaces.Interface):
     BITRATE_GUESS = 9600
+
     def __init__(self, socket):
-        super().__init__()
+        # RNS newer versions use this init signature
         self.name = "RNodeBT"
         self.rxb = 0
         self.txb = 0
         self.online = True
+        self.online = True
+        self.IN = True
+        self.OUT = True
+        self.FWD = False
+        self.RPT = False
+        self.owner = None
         self._socket = socket
         threading.Thread(target=self._read_loop, daemon=True).start()
 
@@ -20,7 +27,7 @@ class AndroidBTInterface(RNS.Interfaces.Interface):
         while self.online:
             try:
                 data = self._socket.read(512)
-                if data:
+                if data and len(data) > 0:
                     self.rxb += len(data)
                     self.processIncoming(bytes(data))
             except Exception as e:
@@ -39,15 +46,31 @@ def message_received(message):
 
 def start(bt_socket_wrapper):
     global destination, lxmf_router
-    RNS.Reticulum(configdir=None, loglevel=RNS.LOG_DEBUG)
+
+    # Start Reticulum with no config file
+    reticulum = RNS.Reticulum(configdir=None, loglevel=RNS.LOG_DEBUG)
+
+    # Manually register our BT interface
     iface = AndroidBTInterface(bt_socket_wrapper)
     RNS.Transport.interfaces.append(iface)
+
+    # Create identity and LXMF destination
     identity = RNS.Identity()
-    lxmf_router = LXMF.LXMRouter(storagepath="/data/data/com.example.rnshello/files/lxmf")
-    destination = lxmf_router.register_delivery_identity(identity, display_name="RNS Hello Android")
+    lxmf_router = LXMF.LXMRouter(
+        storagepath="/data/data/com.example.rnshello/files/lxmf",
+        autopeer=True
+    )
+    destination = lxmf_router.register_delivery_identity(
+        identity,
+        display_name="RNS Hello Android"
+    )
     lxmf_router.register_delivery_callback(message_received)
+
+    # Announce our address on the network
     destination.announce()
-    return RNS.prettyhexrep(destination.hash)
+    addr = RNS.prettyhexrep(destination.hash)
+    RNS.log(f"LXMF address announced: {addr}")
+    return addr
 
 def send_hello(dest_hash_hex):
     global lxmf_router, destination
