@@ -393,7 +393,7 @@ def send_message(dest_hash_hex, text):
         lxmf_router.handle_outbound(msg)
 
         ts = time.strftime("%H:%M:%S")
-        chat_messages.append({"from": "me", "text": text, "ts": ts, "direction": "out"})
+        chat_messages.append({"from": "me", "to": dest_hash_hex, "text": text, "ts": ts, "direction": "out"})
         return "Sent!"
 
     except Exception as e:

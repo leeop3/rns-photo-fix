@@ -49,6 +49,9 @@ class MainActivity : AppCompatActivity() {
     private val btService = BluetoothService()
     private lateinit var btnCamera: Button
     private val REQUEST_IMAGE_CAPTURE = 1001
+    private var currentChatHash: String = ""   // empty = show all
+    private lateinit var tvChatWith: TextView
+    private lateinit var btnClearFilter: Button
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -74,6 +77,43 @@ class MainActivity : AppCompatActivity() {
             text = "Cam"
             setBackgroundColor(Color.parseColor("#0f3460"))
             setTextColor(Color.parseColor("#00d4ff"))
+        }
+
+        // "Chatting with" banner — added programmatically above chat scroll
+        tvChatWith = TextView(this).apply {
+            text = "All messages"
+            textSize = 12f
+            setTextColor(Color.parseColor("#00d4ff"))
+            setPadding(16, 8, 8, 8)
+            visibility = View.VISIBLE
+        }
+        btnClearFilter = Button(this).apply {
+            text = "X"
+            textSize = 10f
+            setPadding(16, 4, 16, 4)
+            setBackgroundColor(Color.parseColor("#1a1a2e"))
+            setTextColor(Color.GRAY)
+        }
+        // Insert banner row above scrollChat
+        (scrollChat.parent as? LinearLayout)?.let { parent ->
+            val idx = parent.indexOfChild(scrollChat)
+            val row = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            }
+            row.addView(tvChatWith, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(btnClearFilter)
+            parent.addView(row, idx)
+        }
+        btnClearFilter.setOnClickListener {
+            currentChatHash = ""
+            tvChatWith.text = "All messages"
+            etDestHash.setText("")
+            lastMessageCount = -1
+            refreshMessages()
         }
 
         if (!Python.isStarted()) {
@@ -152,7 +192,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun refreshMessages() {
-        val messages = try { RNSBridge.getMessages() } catch (e: Exception) { return }
+        val allMessages = try { RNSBridge.getMessages() } catch (e: Exception) { return }
+        // Filter to current contact if one is selected
+        val messages = if (currentChatHash.isEmpty()) allMessages
+        else allMessages.filter { msg ->
+            val fromHash = (msg["from"] ?: "").replace("<","").replace(">","")
+            val toHash   = (msg["to"]   ?: "").replace("<","").replace(">","")
+            fromHash == currentChatHash || toHash == currentChatHash ||
+            (msg["direction"] == "out" && etDestHash.text.toString().trim() == currentChatHash)
+        }
         if (messages.size == lastMessageCount) return
         lastMessageCount = messages.size
         runOnUiThread {
@@ -299,9 +347,12 @@ class MainActivity : AppCompatActivity() {
             setTextColor(Color.GRAY)
         })
         card.setOnClickListener {
+            currentChatHash = cleanHash
             etDestHash.setText(cleanHash)
+            val displayName = if (name.isNotEmpty()) name else cleanHash.take(12) + "..."
+            tvChatWith.text = "Chatting with: $displayName"
+            lastMessageCount = -1  // force refresh with new filter
             showTab("chat")
-            toast("Address copied - type a message and tap Send")
         }
         card.setOnLongClickListener {
             val input = android.widget.EditText(this)
@@ -425,20 +476,23 @@ class MainActivity : AppCompatActivity() {
             val thumbnail = data?.extras?.get("data") as? Bitmap ?: return
             val dest = etDestHash.text.toString().trim()
 
-            // Resize to max 120px wide, compress JPEG quality 25
-            val maxW = 120
-            val scale = maxW.toFloat() / thumbnail.width
-            val w = maxW
-            val h = (thumbnail.height * scale).toInt().coerceAtLeast(1)
-            val small = Bitmap.createScaledBitmap(thumbnail, w, h, true)
-
-            val baos = ByteArrayOutputStream()
-            small.compress(Bitmap.CompressFormat.JPEG, 25, baos)
-            val b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+            // Resize aggressively for LoRa — target <1KB final payload
+            // Try progressively smaller sizes until under 800 bytes
+            var baos = ByteArrayOutputStream()
+            var b64 = ""
+            for (maxW in listOf(80, 60, 48, 32)) {
+                val scale = maxW.toFloat() / thumbnail.width.coerceAtLeast(1)
+                val w = maxW
+                val h = (thumbnail.height * scale).toInt().coerceAtLeast(1)
+                val small = Bitmap.createScaledBitmap(thumbnail, w, h, true)
+                baos = ByteArrayOutputStream()
+                small.compress(Bitmap.CompressFormat.JPEG, 15, baos)
+                b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+                if (b64.length < 1200) break  // ~900 bytes raw = ~1200 b64
+            }
             val payload = "IMG:$b64"
-
-            val sizeKb = baos.size() / 1024
-            toast("Sending photo (${sizeKb}KB)...")
+            val sizeBytes = baos.size()
+            toast("Sending photo (${sizeBytes}B, b64=${b64.length} chars)...")
 
             scope.launch(Dispatchers.IO) {
                 val result = RNSBridge.sendMessage(dest, payload)
