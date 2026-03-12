@@ -208,7 +208,7 @@ def _rns_main(bt_socket_wrapper):
         reticulum = RNS.Reticulum(configdir=configdir, loglevel=RNS.LOG_DEBUG)
 
         iface = AndroidBTInterface(RNS.Transport, "RNodeBT", bt_socket_wrapper)
-        RNS.Transport.register_interface(iface)
+        RNS.Transport.interfaces.append(iface)
 
         identity_path = "/data/data/com.example.rnshello/files/identity"
         if os.path.exists(identity_path):
@@ -249,11 +249,9 @@ def _rns_main(bt_socket_wrapper):
 def start(bt_socket_wrapper):
     global _rns_started
     if _rns_started:
-        # Already started or starting — wait for it to finish then return result
-        _start_done.wait(timeout=30)
         if destination:
             return RNS.prettyhexrep(destination.hash)
-        return _start_result.get("error") or "Timeout"
+        return "Error: already started but no address"
     _rns_started = True
     _start_done.clear()
     _start_result["addr"] = None
