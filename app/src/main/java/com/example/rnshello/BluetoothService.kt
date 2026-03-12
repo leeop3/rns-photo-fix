@@ -2,6 +2,7 @@ package com.example.rnshello
 
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothSocket
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.InputStream
@@ -9,39 +10,101 @@ import java.io.OutputStream
 import java.util.UUID
 
 private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+private const val TAG = "BluetoothService"
 
 class BluetoothService {
     private var socket: BluetoothSocket? = null
-    var inputStream: InputStream? = null
-    var outputStream: OutputStream? = null
+    @Volatile var inputStream: InputStream? = null
+    @Volatile var outputStream: OutputStream? = null
+
+    @Volatile private var deviceAddress: String? = null
+    @Volatile private var isConnected = false
+    @Volatile private var reconnecting = false
 
     suspend fun connect(deviceAddress: String): Boolean = withContext(Dispatchers.IO) {
-        val adapter = BluetoothAdapter.getDefaultAdapter()
-        val device = adapter.getRemoteDevice(deviceAddress)
-        adapter.cancelDiscovery()
-        // RNode BT SPP often rejects the first connection attempt — retry up to 3 times
-        repeat(3) { attempt ->
-            try {
-                socket?.close()
-                socket = device.createRfcommSocketToServiceRecord(SPP_UUID)
-                socket!!.connect()
-                inputStream = socket!!.inputStream
-                outputStream = socket!!.outputStream
-                return@withContext true
-            } catch (e: Exception) {
-                e.printStackTrace()
-                if (attempt < 2) Thread.sleep(1200)
-            }
+        this@BluetoothService.deviceAddress = deviceAddress
+        connectInternal(deviceAddress)
+    }
+
+    private fun connectInternal(address: String): Boolean {
+        return try {
+            try { socket?.close() } catch (_: Exception) {}
+            val adapter = BluetoothAdapter.getDefaultAdapter()
+            val device = adapter.getRemoteDevice(address)
+            val s = device.createRfcommSocketToServiceRecord(SPP_UUID)
+            adapter.cancelDiscovery()
+            s.connect()
+            socket = s
+            inputStream = s.inputStream
+            outputStream = s.outputStream
+            isConnected = true
+            Log.i(TAG, "BT connected to $address")
+            true
+        } catch (e: Exception) {
+            isConnected = false
+            Log.e(TAG, "BT connect failed: ${e.message}")
+            false
         }
-        false
+    }
+
+    // Reconnect runs fully async — never blocks the caller
+    private fun triggerReconnect() {
+        if (reconnecting) return
+        reconnecting = true
+        isConnected = false
+        Thread {
+            Log.i(TAG, "BT reconnect started...")
+            val address = deviceAddress
+            if (address == null) { reconnecting = false; return@Thread }
+            var attempts = 0
+            while (attempts < 20 && deviceAddress != null) {
+                Thread.sleep(2000)
+                if (connectInternal(address)) {
+                    Log.i(TAG, "BT reconnected after ${attempts + 1} attempts")
+                    break
+                }
+                attempts++
+            }
+            reconnecting = false
+        }.also { it.isDaemon = true }.start()
     }
 
     fun read(maxBytes: Int): ByteArray {
-        val buf = ByteArray(maxBytes)
-        val n = inputStream?.read(buf) ?: 0
-        return buf.copyOf(n)
+        return try {
+            val buf = ByteArray(maxBytes)
+            val n = inputStream?.read(buf) ?: -1
+            if (n <= 0) {
+                Log.w(TAG, "BT read returned $n")
+                triggerReconnect()
+                ByteArray(0)
+            } else {
+                buf.copyOf(n)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "BT read error: ${e.message}")
+            triggerReconnect()
+            ByteArray(0)
+        }
     }
 
-    fun write(data: ByteArray) { outputStream?.write(data) }
-    fun disconnect() { socket?.close() }
+    // write() NEVER blocks for reconnect — just throws so Python logs it and moves on
+    fun write(data: ByteArray) {
+        if (!isConnected) {
+            triggerReconnect()
+            throw Exception("BT not connected, reconnecting...")
+        }
+        try {
+            outputStream?.write(data)
+        } catch (e: Exception) {
+            Log.w(TAG, "BT write error: ${e.message}")
+            triggerReconnect()
+            throw e  // let Python layer log it, don't block here
+        }
+    }
+
+    fun disconnect() {
+        deviceAddress = null
+        isConnected = false
+        try { socket?.close() } catch (_: Exception) {}
+    }
 }

@@ -195,12 +195,8 @@ def _noop_signal(sig, handler):
     pass
 
 def incoming_link_established(link):
-    """Accept incoming links so senders can deliver messages to us."""
-    RNS.log(f"Incoming link established: {link}")
-    link.set_packet_callback(incoming_link_packet)
-
-def incoming_link_packet(message, packet):
-    RNS.log(f"Packet on incoming link: {len(message)} bytes")
+    RNS.log(f"Incoming link established from {link}")
+    link.set_packet_callback(lambda msg, pkt: RNS.log(f"Link packet: {len(msg)} bytes"))
 
 def _rns_main(bt_socket_wrapper):
     global destination, lxmf_router, reticulum
@@ -215,10 +211,11 @@ def _rns_main(bt_socket_wrapper):
         original_signal = signal.signal
         signal.signal = _noop_signal
 
+        # Interface must exist before Reticulum() starts Transport
         iface = AndroidBTInterface(RNS.Transport, "RNodeBT", bt_socket_wrapper)
-        reticulum = RNS.Reticulum(configdir=configdir, loglevel=RNS.LOG_DEBUG)
         RNS.Transport.interfaces.append(iface)
-        time.sleep(0.5)
+
+        reticulum = RNS.Reticulum(configdir=configdir, loglevel=RNS.LOG_DEBUG)
 
         files_dir = "/data/data/com.example.rnshello/files"
         os.makedirs(files_dir, exist_ok=True)
@@ -253,7 +250,6 @@ def _rns_main(bt_socket_wrapper):
             identity,
             display_name="RNS Hello Android"
         )
-        # Accept incoming links — without this the receiver never responds to link requests
         destination.set_proof_strategy(RNS.Destination.PROVE_ALL)
         destination.set_link_established_callback(incoming_link_established)
         lxmf_router.register_delivery_callback(message_received)
@@ -307,19 +303,9 @@ def send_message(dest_hash_hex, text):
             RNS.log(f"Using cached identity for {dest_hash_hex}")
 
         if recalled_identity is None:
-            RNS.log("No identity known, requesting path and waiting...")
+            RNS.log("No identity known, requesting path...")
             RNS.Transport.request_path(dest_hash)
-            for i in range(15):
-                time.sleep(2)
-                recalled_identity = known_identities.get(dest_hash_hex)
-                if recalled_identity is None:
-                    recalled_identity = RNS.Identity.recall(dest_hash)
-                if recalled_identity is not None:
-                    RNS.log(f"Got identity after {(i+1)*2}s")
-                    break
-
-        if recalled_identity is None:
-            return "No identity known for destination. Have they announced recently?"
+            return "Unknown destination — ask them to tap Announce first"
 
         # Step 2: build LXMF destination
         lxmf_dest = RNS.Destination(
