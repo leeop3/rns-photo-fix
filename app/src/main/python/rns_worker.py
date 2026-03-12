@@ -10,15 +10,16 @@ from collections import deque
 
 destination = None
 lxmf_router = None
-reticulum = None
+reticulum    = None
 _rns_started = False
-_start_done = threading.Event()
+_start_done  = threading.Event()
 _start_result = {"addr": None, "error": None}
 
-# Shared state
+# Thread-safe shared state
+_data_lock    = threading.Lock()
 chat_messages = []
 seen_announces = []
-known_identities = {}  # hash_hex -> RNS.Identity, populated from announces
+known_identities = {}  # plain hex (no <>) -> RNS.Identity
 
 RNS_CONFIG = """
 [reticulum]
@@ -64,17 +65,17 @@ def configure_rnode(socket):
     socket.write(kiss_cmd(CMD_RADIO_STATE, bytes([0x00])))
     time.sleep(0.5)
     socket.write(kiss_cmd(CMD_FREQUENCY, struct.pack(">I", 433025000)))
-    time.sleep(0.1)
+    time.sleep(0.2)
     socket.write(kiss_cmd(CMD_BANDWIDTH, struct.pack(">I", 31250)))
-    time.sleep(0.1)
+    time.sleep(0.2)
     socket.write(kiss_cmd(CMD_TXPOWER, bytes([17])))
-    time.sleep(0.1)
+    time.sleep(0.2)
     socket.write(kiss_cmd(CMD_SF, bytes([8])))
-    time.sleep(0.1)
+    time.sleep(0.2)
     socket.write(kiss_cmd(CMD_CR, bytes([6])))
-    time.sleep(0.1)
+    time.sleep(0.2)
     socket.write(kiss_cmd(CMD_RADIO_STATE, bytes([RADIO_STATE_ON])))
-    time.sleep(0.5)
+    time.sleep(1.0)
     RNS.log("RNode radio configured and ON")
 
 class AndroidBTInterface(Interface):
@@ -82,7 +83,7 @@ class AndroidBTInterface(Interface):
 
     def __init__(self, owner, name, socket):
         super().__init__()
-        self.owner                  = owner   # RNS Transport instance
+        self.owner                  = owner
         self.name                   = name
         self.rxb                    = 0
         self.txb                    = 0
@@ -109,6 +110,7 @@ class AndroidBTInterface(Interface):
         self.ifac_key               = None
         self.ifac_identity          = None
         self.ifac_signature         = None
+        # Required by RNS Transport
         self.announce_rate_target   = None
         self.announce_rate_grace    = None
         self.announce_rate_penalty  = None
@@ -166,16 +168,16 @@ class AndroidBTInterface(Interface):
             RNS.log(f"BT write error: {e}")
 
 def message_received(message):
-    sender = RNS.prettyhexrep(message.source_hash)
+    sender = RNS.prettyhexrep(message.source_hash).strip("<>")
     text = message.content_as_string()
     ts = time.strftime("%H:%M:%S")
     RNS.log(f"MSG RECEIVED from {sender}: {text}")
-    entry = {"from": sender, "text": text, "ts": ts, "direction": "in"}
-    chat_messages.append(entry)
+    with _data_lock:
+        chat_messages.append({"from": sender, "text": text, "ts": ts, "direction": "in"})
 
 def announce_received(destination_hash, announced_identity, app_data):
-    global known_identities
-    hash_str = RNS.prettyhexrep(destination_hash)
+    # Always store with plain hex key (no <> brackets)
+    hash_str = RNS.prettyhexrep(destination_hash).strip("<>")
     name = ""
     if app_data:
         try:
@@ -184,22 +186,26 @@ def announce_received(destination_hash, announced_identity, app_data):
             name = str(app_data)
     ts = time.strftime("%H:%M:%S")
     RNS.log(f"ANNOUNCE from {hash_str} name={name}")
-    # Store the identity so we can send to this peer
     if announced_identity is not None:
-        known_identities[hash_str] = announced_identity
+        with _data_lock:
+            known_identities[hash_str] = announced_identity
         RNS.log(f"Identity stored for {hash_str}")
     entry = {"hash": hash_str, "name": name, "ts": ts}
-    for i, a in enumerate(seen_announces):
-        if a["hash"] == hash_str:
-            seen_announces[i] = entry
-            return
-    seen_announces.append(entry)
+    with _data_lock:
+        for i, a in enumerate(seen_announces):
+            if a["hash"] == hash_str:
+                seen_announces[i] = entry
+                return
+        seen_announces.append(entry)
 
 class AnnounceHandler:
     aspect_filter = "lxmf.delivery"
 
     def received_announce(self, destination_hash, announced_identity, app_data):
         announce_received(destination_hash, announced_identity, app_data)
+
+def incoming_link_established(link):
+    RNS.log(f"Incoming link: {link}")
 
 def _noop_signal(sig, handler):
     pass
@@ -220,6 +226,8 @@ def _rns_main(bt_socket_wrapper):
         iface = AndroidBTInterface(RNS.Transport, "RNodeBT", bt_socket_wrapper)
         RNS.Transport.interfaces.append(iface)
         reticulum = RNS.Reticulum(configdir=configdir, loglevel=RNS.LOG_DEBUG)
+
+        signal.signal = original_signal
 
         files_dir = "/data/data/com.example.rnshello/files"
         os.makedirs(files_dir, exist_ok=True)
@@ -248,19 +256,17 @@ def _rns_main(bt_socket_wrapper):
             autopeer=True
         )
 
-        signal.signal = original_signal
-
         destination = lxmf_router.register_delivery_identity(
             identity,
             display_name="RNS Hello Android"
         )
         destination.set_proof_strategy(RNS.Destination.PROVE_ALL)
+        destination.set_link_established_callback(incoming_link_established)
         lxmf_router.register_delivery_callback(message_received)
         RNS.Transport.register_announce_handler(AnnounceHandler())
 
         destination.announce()
-
-        addr = RNS.prettyhexrep(destination.hash)
+        addr = RNS.prettyhexrep(destination.hash).strip("<>")
         RNS.log(f"LXMF address announced: {addr}")
         _start_result["addr"] = addr
 
@@ -274,9 +280,10 @@ def _rns_main(bt_socket_wrapper):
 def start(bt_socket_wrapper):
     global _rns_started
     if _rns_started:
+        _start_done.wait(timeout=30)
         if destination:
-            return RNS.prettyhexrep(destination.hash)
-        return "Error: already started but no address"
+            return RNS.prettyhexrep(destination.hash).strip("<>")
+        return _start_result.get("error") or "Timeout"
     _rns_started = True
     _start_done.clear()
     _start_result["addr"] = None
@@ -287,17 +294,30 @@ def start(bt_socket_wrapper):
         return f"Error: {_start_result['error']}"
     return _start_result["addr"] or "Timeout"
 
+def announce():
+    try:
+        if destination:
+            destination.announce()
+            addr = RNS.prettyhexrep(destination.hash).strip("<>")
+            RNS.log(f"Manual announce sent: {addr}")
+            return f"Announced! {addr}"
+        return "Not ready yet"
+    except Exception as e:
+        return f"Error: {e}"
+
 def send_message(dest_hash_hex, text):
     global lxmf_router, destination, known_identities
     if not lxmf_router or not destination:
         return "Not connected"
     try:
-        dest_hash_hex = dest_hash_hex.strip()
-        dest_hash = bytes.fromhex(dest_hash_hex.strip().strip('<>'))
+        # Normalise — always work with plain hex, no brackets
+        dest_hash_hex = dest_hash_hex.strip().strip("<>")
+        dest_hash = bytes.fromhex(dest_hash_hex)
         RNS.log(f"Sending to {dest_hash_hex}: {text}")
 
-        # Step 1: get identity - prefer from announce cache, fallback to recall
-        recalled_identity = known_identities.get(dest_hash_hex)
+        # Get identity from announce cache first, then RNS recall
+        with _data_lock:
+            recalled_identity = known_identities.get(dest_hash_hex)
         if recalled_identity is None:
             recalled_identity = RNS.Identity.recall(dest_hash)
             RNS.log(f"Identity recall result: {recalled_identity}")
@@ -305,21 +325,9 @@ def send_message(dest_hash_hex, text):
             RNS.log(f"Using cached identity for {dest_hash_hex}")
 
         if recalled_identity is None:
-            RNS.log("No identity known, requesting path and waiting...")
             RNS.Transport.request_path(dest_hash)
-            for i in range(15):
-                time.sleep(2)
-                recalled_identity = known_identities.get(dest_hash_hex)
-                if recalled_identity is None:
-                    recalled_identity = RNS.Identity.recall(dest_hash)
-                if recalled_identity is not None:
-                    RNS.log(f"Got identity after {(i+1)*2}s")
-                    break
+            return "Unknown destination — ask them to tap Announce first"
 
-        if recalled_identity is None:
-            return "No identity known for destination. Have they announced recently?"
-
-        # Step 2: build LXMF destination
         lxmf_dest = RNS.Destination(
             recalled_identity,
             RNS.Destination.OUT,
@@ -329,30 +337,25 @@ def send_message(dest_hash_hex, text):
         )
         RNS.log(f"LXMF dest hash: {RNS.prettyhexrep(lxmf_dest.hash)}")
 
-        # Step 3: send — DIRECT if path known, else PROPAGATED fallback
-        method = LXMF.LXMessage.OPPORTUNISTIC
-        if not RNS.Transport.has_path(lxmf_dest.hash):
-            RNS.log("No path, will try DIRECT anyway (single-hop LoRa)")
-
         msg = LXMF.LXMessage(
             lxmf_dest,
             destination,
             text,
             title="",
-            desired_method=method
+            desired_method=LXMF.LXMessage.OPPORTUNISTIC
         )
         msg.register_delivery_callback(lambda m: RNS.log(f"Delivered! state={m.state}"))
         msg.register_failed_callback(lambda m: RNS.log(f"Failed! state={m.state}"))
         lxmf_router.handle_outbound(msg)
 
         ts = time.strftime("%H:%M:%S")
-        chat_messages.append({"from": "me", "text": text, "ts": ts, "direction": "out"})
+        with _data_lock:
+            chat_messages.append({"from": "me", "text": text, "ts": ts, "direction": "out"})
         return "Sent!"
 
     except Exception as e:
         import traceback
-        err = traceback.format_exc()
-        RNS.log(f"send_message error: {err}")
+        RNS.log(f"send_message error: {traceback.format_exc()}")
         return f"Error: {e}"
 
 def get_messages():
@@ -360,8 +363,11 @@ def get_messages():
         return list(chat_messages)
 
 def get_announces():
-    return list(seen_announces)
+    with _data_lock:
+        return list(seen_announces)
 
 def get_address():
     global destination
-    return RNS.prettyhexrep(destination.hash) if destination else "Not initialized"
+    if destination:
+        return RNS.prettyhexrep(destination.hash).strip("<>")
+    return "Not initialized"
