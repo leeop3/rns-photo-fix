@@ -214,19 +214,40 @@ class AndroidBTInterface(Interface):
 def message_received(message):
     sender = RNS.prettyhexrep(message.source_hash)
     ts = time.strftime("%H:%M:%S")
+
+    # Check for image/file attachment field first (LXMF standard)
+    text = ""
     try:
-        raw = message.content
-        if isinstance(raw, bytes):
-            text = raw.decode("utf-8")
-        else:
+        fields = message.fields
+        if fields and LXMF.FIELD_FILE_ATTACHMENTS in fields:
+            attachments = fields[LXMF.FIELD_FILE_ATTACHMENTS]
+            if attachments:
+                fname, fdata = attachments[0][0], attachments[0][1]
+                fname_lower = str(fname).lower()
+                if any(fname_lower.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp"]):
+                    import base64
+                    b64 = base64.b64encode(fdata).decode("ascii")
+                    text = f"IMG:{b64}"
+                    RNS.log(f"MSG RECEIVED image from {sender}, size={len(fdata)}B")
+                else:
+                    text = f"[File: {fname}]"
+                    RNS.log(f"MSG RECEIVED file from {sender}: {fname}")
+    except Exception as e:
+        RNS.log(f"Field decode error: {e}")
+
+    # Fall back to text content if no image field
+    if not text:
+        try:
+            raw = message.content
+            if isinstance(raw, bytes):
+                text = raw.decode("utf-8")
+            else:
+                text = message.content_as_string()
+            text = text.strip().strip("\x00")
+        except Exception:
             text = message.content_as_string()
-    except Exception:
-        text = message.content_as_string()
-    # Strip null bytes and whitespace that LXMF sometimes adds
-    text = text.strip().strip("\x00")
-    is_image = text.startswith("IMG:")
-    RNS.log(f"MSG RECEIVED from {sender}: type={type(text).__name__} len={len(text)} starts={repr(text[:20])}")
-    RNS.log(f"Is image: {is_image}")
+
+    RNS.log(f"MSG RECEIVED from {sender}: {'[IMAGE]' if text.startswith('IMG:') else text[:60]}")
     entry = {"from": sender, "text": text, "ts": ts, "direction": "in"}
     chat_messages.append(entry)
 
@@ -421,7 +442,16 @@ def _do_send(dest_hash_hex, text):
 
         method = LXMF.LXMessage.DIRECT
         if text.startswith("IMG:"):
-            msg = LXMF.LXMessage(lxmf_dest, destination, text.encode("utf-8"), title="", desired_method=method)
+            # Use LXMF standard FIELD_FILE_ATTACHMENTS so Sideband displays natively
+            import base64 as _b64
+            img_bytes = _b64.b64decode(text[4:])
+            attachment = ["photo.jpg", img_bytes]
+            lxm_fields = {LXMF.FIELD_FILE_ATTACHMENTS: [attachment]}
+            msg = LXMF.LXMessage(
+                lxmf_dest, destination, "",
+                title="", desired_method=method, fields=lxm_fields
+            )
+            RNS.log(f"Sending image as FIELD_FILE_ATTACHMENTS, size={len(img_bytes)}B")
         else:
             msg = LXMF.LXMessage(lxmf_dest, destination, text, title="", desired_method=method)
 
