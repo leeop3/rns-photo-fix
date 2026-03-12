@@ -30,33 +30,30 @@ class MainActivity : AppCompatActivity() {
 
     // ── Views ─────────────────────────────────────────────────────────────────
 
-    private lateinit var spinnerDevices:     Spinner
-    private lateinit var btnConnect:         Button
-    private lateinit var tvMyAddress:        TextView
-    private lateinit var btnTabChat:         Button
-    private lateinit var btnTabAnnounces:    Button
-    private lateinit var btnTabContacts:     Button
-    private lateinit var panelChat:          LinearLayout
-    private lateinit var panelAnnounces:     LinearLayout
-    private lateinit var panelContacts:      LinearLayout
-    private lateinit var scrollChat:         ScrollView
-    private lateinit var chatContainer:      LinearLayout
-    private lateinit var announcesContainer: LinearLayout
-    private lateinit var contactsContainer:  LinearLayout
-    private lateinit var etDestHash:         EditText
-    private lateinit var etMessage:          EditText
-    private lateinit var btnSend:            Button
-    private lateinit var btnAnnounce:        Button
+    private lateinit var spinnerDevices:    Spinner
+    private lateinit var btnConnect:        Button
+    private lateinit var tvMyAddress:       TextView
+    private lateinit var btnTabChat:        Button
+    private lateinit var btnTabAnnounces:   Button
+    private lateinit var panelChat:         LinearLayout
+    private lateinit var panelAnnounces:    LinearLayout
+    private lateinit var scrollChat:        ScrollView
+    private lateinit var chatContainer:     LinearLayout
+    private lateinit var announcesContainer:LinearLayout
+    private lateinit var etDestHash:        EditText
+    private lateinit var etMessage:         EditText
+    private lateinit var btnSend:           Button
+    private lateinit var btnAnnounce:       Button
 
     // ── State ─────────────────────────────────────────────────────────────────
 
-    private val handler           = Handler(Looper.getMainLooper())
-    private var refreshRunnable:  Runnable? = null
-    private var lastMessageCount  = 0
+    private val handler          = Handler(Looper.getMainLooper())
+    private var refreshRunnable: Runnable? = null
+    private var lastMessageCount = 0
     private var lastAnnounceCount = 0
-    private val btService         = BluetoothService()
-    private val scope             = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private var myAddress         = ""
+    private val btService        = BluetoothService()
+    private val scope            = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var myAddress        = ""
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -89,14 +86,11 @@ class MainActivity : AppCompatActivity() {
         tvMyAddress        = findViewById(R.id.tvMyAddress)
         btnTabChat         = findViewById(R.id.btnTabChat)
         btnTabAnnounces    = findViewById(R.id.btnTabAnnounces)
-        btnTabContacts     = findViewById(R.id.btnTabContacts)
         panelChat          = findViewById(R.id.panelChat)
         panelAnnounces     = findViewById(R.id.panelAnnounces)
-        panelContacts      = findViewById(R.id.panelContacts)
         scrollChat         = findViewById(R.id.scrollChat)
         chatContainer      = findViewById(R.id.chatContainer)
         announcesContainer = findViewById(R.id.announcesContainer)
-        contactsContainer  = findViewById(R.id.contactsContainer)
         etDestHash         = findViewById(R.id.etDestHash)
         etMessage          = findViewById(R.id.etMessage)
         btnSend            = findViewById(R.id.btnSend)
@@ -108,20 +102,45 @@ class MainActivity : AppCompatActivity() {
     private fun setupTabs() {
         btnTabChat.setOnClickListener      { showTab("chat") }
         btnTabAnnounces.setOnClickListener { showTab("announces") }
-        btnTabContacts.setOnClickListener  { showTab("contacts") }
     }
 
     private fun setupAddressBar() {
+        // Tap my address → show QR
         tvMyAddress.setOnClickListener {
             if (myAddress.isNotEmpty()) showQrDialog(myAddress)
         }
+
+        // Single tap dest field → offer scan or manual entry
         etDestHash.setOnClickListener {
-            AlertDialog.Builder(this)
+            val hash = etDestHash.text.toString().trim()
+            val builder = AlertDialog.Builder(this)
                 .setTitle("Enter address")
                 .setMessage("Type address manually or scan a QR code")
-                .setPositiveButton("📷 Scan QR") { _, _ -> launchQrScanner() }
+                .setPositiveButton("📷 Scan QR") { dialog, _ ->
+                    dialog.dismiss()
+                    // Post to next frame so dialog fully dismisses before launching camera
+                    etDestHash.post { launchQrScanner() }
+                }
                 .setNegativeButton("Type manually", null)
-                .show()
+            // Only show contact card option if there is already a valid hash in the field
+            if (hash.length == 32) {
+                builder.setNeutralButton("👤 Contact card") { dialog, _ ->
+                    dialog.dismiss()
+                    showContactCardDialog(hash)
+                }
+            }
+            builder.show()
+        }
+
+        // Long press dest field → show contact card for the current address
+        etDestHash.setOnLongClickListener {
+            val hash = etDestHash.text.toString().trim()
+            if (hash.length == 32) {
+                showContactCardDialog(hash)
+                true  // consume the event so keyboard does not pop up
+            } else {
+                false // let normal long-press (select text) happen if field is empty
+            }
         }
     }
 
@@ -153,35 +172,21 @@ class MainActivity : AppCompatActivity() {
     private fun showTab(tab: String) {
         val cyan = colorStateList("#00d4ff")
         val dark = colorStateList("#0f3460")
-
-        // Reset all tabs to dark
-        listOf(btnTabChat, btnTabAnnounces, btnTabContacts).forEach {
-            it.backgroundTintList = dark
-            it.setTextColor(Color.WHITE)
-        }
-        // Hide all panels
-        panelChat.visibility     = View.GONE
-        panelAnnounces.visibility = View.GONE
-        panelContacts.visibility  = View.GONE
-
-        when (tab) {
-            "chat" -> {
-                panelChat.visibility = View.VISIBLE
-                btnTabChat.backgroundTintList = cyan
-                btnTabChat.setTextColor(Color.parseColor("#1a1a2e"))
-            }
-            "announces" -> {
-                panelAnnounces.visibility = View.VISIBLE
-                btnTabAnnounces.backgroundTintList = cyan
-                btnTabAnnounces.setTextColor(Color.parseColor("#1a1a2e"))
-                refreshAnnounces()
-            }
-            "contacts" -> {
-                panelContacts.visibility = View.VISIBLE
-                btnTabContacts.backgroundTintList = cyan
-                btnTabContacts.setTextColor(Color.parseColor("#1a1a2e"))
-                refreshContacts()
-            }
+        if (tab == "chat") {
+            panelChat.visibility      = View.VISIBLE
+            panelAnnounces.visibility = View.GONE
+            btnTabChat.backgroundTintList      = cyan
+            btnTabChat.setTextColor(Color.parseColor("#1a1a2e"))
+            btnTabAnnounces.backgroundTintList = dark
+            btnTabAnnounces.setTextColor(Color.WHITE)
+        } else {
+            panelChat.visibility      = View.GONE
+            panelAnnounces.visibility = View.VISIBLE
+            btnTabAnnounces.backgroundTintList = cyan
+            btnTabAnnounces.setTextColor(Color.parseColor("#1a1a2e"))
+            btnTabChat.backgroundTintList      = dark
+            btnTabChat.setTextColor(Color.WHITE)
+            refreshAnnounces()
         }
     }
 
@@ -203,9 +208,10 @@ class MainActivity : AppCompatActivity() {
         btnConnect.setOnClickListener {
             val idx = spinnerDevices.selectedItemPosition
             if (idx < 0 || idx >= paired.size) return@setOnClickListener
+            val device = paired[idx]
             btnConnect.isEnabled = false
-            toast("Connecting to ${paired[idx].address}...")
-            scope.launch { connectAndStart(paired[idx].address) }
+            toast("Connecting to ${device.address}...")
+            scope.launch { connectAndStart(device.address) }
         }
     }
 
@@ -249,12 +255,8 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread {
             chatContainer.removeAllViews()
             messages.forEach { msg ->
-                val hash = msg["from"] ?: ""
-                // UI layer only: resolve hash → contact name for display
-                val displayName = if (msg["direction"] == "out") "me"
-                                  else RNSBridge.resolveName(hash, hash.take(8))
                 addChatBubble(
-                    from       = displayName,
+                    from       = msg["from"] ?: "",
                     text       = msg["text"] ?: "",
                     ts         = msg["ts"]   ?: "",
                     isOutgoing = msg["direction"] == "out"
@@ -271,34 +273,11 @@ class MainActivity : AppCompatActivity() {
         runOnUiThread {
             announcesContainer.removeAllViews()
             announces.reversed().forEach { ann ->
-                val hash = ann["hash"] ?: ""
-                val rnsName = ann["name"] ?: ""
-                // UI layer only: contact name takes priority over RNS announce name
-                val displayName = RNSBridge.resolveName(hash, rnsName)
-                addAnnounceCard(hash = hash, displayName = displayName, rnsName = rnsName, ts = ann["ts"] ?: "")
-            }
-        }
-    }
-
-    private fun refreshContacts() {
-        val contacts = try { RNSBridge.getContacts() } catch (_: Exception) { return }
-        runOnUiThread {
-            contactsContainer.removeAllViews()
-            if (contacts.isEmpty()) {
-                contactsContainer.addView(TextView(this).apply {
-                    text = "No contacts yet.\nTap 'Add Contact' on a Network peer to save them."
-                    setTextColor(Color.GRAY)
-                    textSize = 14f
-                    gravity = Gravity.CENTER
-                    setPadding(32, 64, 32, 0)
-                })
-            } else {
-                contacts.forEach { contact ->
-                    addContactCard(
-                        hash = contact["hash"] ?: "",
-                        name = contact["name"] ?: ""
-                    )
-                }
+                addAnnounceCard(
+                    hash = ann["hash"] ?: "",
+                    name = ann["name"] ?: "",
+                    ts   = ann["ts"]   ?: ""
+                )
             }
         }
     }
@@ -315,6 +294,7 @@ class MainActivity : AppCompatActivity() {
             gravity = if (isOutgoing) Gravity.END else Gravity.START
         }
 
+        // Sender label (incoming only)
         if (!isOutgoing) {
             wrapper.addView(TextView(this).apply {
                 this.text = from
@@ -324,12 +304,15 @@ class MainActivity : AppCompatActivity() {
             })
         }
 
+        // Message body — image or text
         val trimmed = text.trim().trimStart('\u0000')
-        wrapper.addView(
-            if (trimmed.startsWith("IMG:")) buildImageBubble(trimmed, isOutgoing)
-            else buildTextBubble(trimmed, isOutgoing)
-        )
+        if (trimmed.startsWith("IMG:")) {
+            wrapper.addView(buildImageBubble(trimmed, isOutgoing))
+        } else {
+            wrapper.addView(buildTextBubble(trimmed, isOutgoing))
+        }
 
+        // Timestamp
         wrapper.addView(TextView(this).apply {
             this.text = ts
             textSize  = 9f
@@ -379,7 +362,7 @@ class MainActivity : AppCompatActivity() {
 
     // ── Announce cards ────────────────────────────────────────────────────────
 
-    private fun addAnnounceCard(hash: String, displayName: String, rnsName: String, ts: String) {
+    private fun addAnnounceCard(hash: String, name: String, ts: String) {
         val cleanHash = hash.replace("<", "").replace(">", "")
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -390,193 +373,107 @@ class MainActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).also { it.setMargins(0, 4, 0, 4) }
         }
-
-        // Display name (contact name or RNS name)
         card.addView(TextView(this).apply {
-            text     = displayName.ifEmpty { "Unknown node" }
+            text     = if (name.isNotEmpty()) name else "Unknown node"
             textSize = 14f
             setTextColor(Color.WHITE)
         })
-
-        // Raw hash — always visible so user knows the real address
         card.addView(TextView(this).apply {
             text     = cleanHash
             textSize = 10f
             setTextColor(Color.parseColor("#00d4ff"))
             typeface = Typeface.MONOSPACE
         })
-
         card.addView(TextView(this).apply {
             text     = "Seen at $ts"
             textSize = 9f
             setTextColor(Color.GRAY)
         })
-
-        // Action row: Chat button + Add Contact button
-        val actionRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.topMargin = 8 }
+        card.setOnClickListener {
+            etDestHash.setText(cleanHash)
+            showTab("chat")
+            toast("Address loaded — type a message and tap Send")
         }
-
-        actionRow.addView(Button(this).apply {
-            text = "💬 Chat"
-            textSize = 11f
-            setTextColor(Color.parseColor("#1a1a2e"))
-            backgroundTintList = colorStateList("#00d4ff")
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                .also { it.marginEnd = 4 }
-            setOnClickListener {
-                etDestHash.setText(cleanHash)
-                showTab("chat")
-                toast("Address loaded — type a message and tap Send")
-            }
-        })
-
-        actionRow.addView(Button(this).apply {
-            text = "👤 Add Contact"
-            textSize = 11f
-            setTextColor(Color.WHITE)
-            backgroundTintList = colorStateList("#1a3a5c")
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                .also { it.marginStart = 4 }
-            setOnClickListener {
-                showSaveContactDialog(cleanHash, rnsName)
-            }
-        })
-
-        card.addView(actionRow)
         announcesContainer.addView(card)
     }
 
-    // ── Contact cards ─────────────────────────────────────────────────────────
+    // ── Contact card dialog ──────────────────────────────────────────────────
 
-    private fun addContactCard(hash: String, name: String) {
+    /**
+     * Shows a contact card for a given hash.
+     * Displays the full address, current saved name (if any), and an input
+     * to assign or update the nickname. Saving immediately updates chat bubbles
+     * and announce cards via name resolution.
+     */
+    private fun showContactCardDialog(hash: String) {
         val cleanHash = hash.replace("<", "").replace(">", "")
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(16, 12, 16, 12)
-            setBackgroundColor(Color.parseColor("#0f3460"))
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.setMargins(0, 4, 0, 4) }
-        }
+        val currentName = try { RNSBridge.resolveName(cleanHash) } catch (_: Exception) { "" }
+        // Only prefill if it's a real saved name, not a truncated fallback
+        val prefill = if (currentName.length < 32) currentName else ""
 
-        // Info column
-        val info = LinearLayout(this).apply {
+        val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setPadding(48, 24, 48, 8)
         }
-        info.addView(TextView(this).apply {
-            text     = name
-            textSize = 15f
-            setTextColor(Color.WHITE)
-        })
-        info.addView(TextView(this).apply {
-            text     = "${cleanHash.take(8)}…${cleanHash.takeLast(4)}"
-            textSize = 10f
+
+        // Full address display
+        layout.addView(TextView(this).apply {
+            text = cleanHash
+            textSize = 11f
+            typeface = android.graphics.Typeface.MONOSPACE
             setTextColor(Color.parseColor("#00d4ff"))
-            typeface = Typeface.MONOSPACE
-        })
-        card.addView(info)
-
-        // Chat button
-        card.addView(Button(this).apply {
-            text = "💬"
-            textSize = 16f
-            backgroundTintList = colorStateList("#00d4ff")
-            setTextColor(Color.parseColor("#1a1a2e"))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.marginStart = 8 }
-            setOnClickListener {
-                etDestHash.setText(cleanHash)
-                showTab("chat")
-            }
+            setPadding(0, 0, 0, 16)
         })
 
-        // Edit button
-        card.addView(Button(this).apply {
-            text = "✏️"
-            textSize = 16f
-            backgroundTintList = colorStateList("#1a3a5c")
-            setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.marginStart = 4 }
-            setOnClickListener {
-                showSaveContactDialog(cleanHash, name)
-            }
+        // Nickname input
+        layout.addView(TextView(this).apply {
+            text = "Nickname"
+            textSize = 12f
+            setTextColor(Color.GRAY)
         })
-
-        // Delete button
-        card.addView(Button(this).apply {
-            text = "🗑️"
-            textSize = 16f
-            backgroundTintList = colorStateList("#3a1a1a")
-            setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.marginStart = 4 }
-            setOnClickListener {
-                AlertDialog.Builder(this@MainActivity)
-                    .setTitle("Delete contact")
-                    .setMessage("Remove $name?")
-                    .setPositiveButton("Delete") { _, _ ->
-                        scope.launch(Dispatchers.IO) {
-                            RNSBridge.deleteContact(cleanHash)
-                            withContext(Dispatchers.Main) {
-                                toast("$name removed")
-                                refreshContacts()
-                            }
-                        }
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
-            }
-        })
-
-        contactsContainer.addView(card)
-    }
-
-    // ── Save / edit contact dialog ────────────────────────────────────────────
-
-    private fun showSaveContactDialog(hash: String, prefillName: String) {
-        val input = EditText(this).apply {
-            setText(prefillName)
-            hint = "Enter a name"
+        val input = android.widget.EditText(this).apply {
+            setText(prefill)
+            hint = "e.g. Alice's RNode"
             setTextColor(Color.WHITE)
             setHintTextColor(Color.GRAY)
-            setPadding(32, 16, 32, 16)
+            setSingleLine(true)
         }
+        layout.addView(input)
+
         AlertDialog.Builder(this)
-            .setTitle("Save contact")
-            .setMessage("Name for\n${hash.take(8)}…${hash.takeLast(4)}")
-            .setView(input)
-            .setPositiveButton("Save") { _, _ ->
+            .setTitle("Contact card")
+            .setView(layout)
+            .setPositiveButton("💾 Save") { _, _ ->
                 val name = input.text.toString().trim()
-                if (name.isEmpty()) { toast("Enter a name"); return@setPositiveButton }
+                if (name.isEmpty()) { toast("Enter a nickname"); return@setPositiveButton }
                 scope.launch(Dispatchers.IO) {
-                    RNSBridge.saveContact(hash, name)
+                    RNSBridge.saveContact(cleanHash, name)
                     withContext(Dispatchers.Main) {
-                        toast("Contact saved: $name")
-                        // Refresh whichever panels are visible
-                        refreshContacts()
-                        refreshAnnounces()
-                        // Also refresh messages so chat bubble names update
+                        toast("Saved: $name")
+                        // Force re-render of chat and announces with new name
                         lastMessageCount = 0
                         refreshMessages()
+                        refreshAnnounces()
                     }
                 }
             }
             .setNegativeButton("Cancel", null)
+            .also { builder ->
+                // Only show delete if a contact already exists
+                if (prefill.isNotEmpty()) {
+                    builder.setNeutralButton("🗑️ Remove") { _, _ ->
+                        scope.launch(Dispatchers.IO) {
+                            RNSBridge.deleteContact(cleanHash)
+                            withContext(Dispatchers.Main) {
+                                toast("Contact removed")
+                                lastMessageCount = 0
+                                refreshMessages()
+                                refreshAnnounces()
+                            }
+                        }
+                    }
+                }
+            }
             .show()
     }
 
@@ -586,8 +483,9 @@ class MainActivity : AppCompatActivity() {
         val size = 600
         val bits = try {
             MultiFormatWriter().encode(address, BarcodeFormat.QR_CODE, size, size)
-        } catch (e: Exception) { toast("QR error: ${e.message}"); return }
-
+        } catch (e: Exception) {
+            toast("QR error: ${e.message}"); return
+        }
         val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.RGB_565).apply {
             for (x in 0 until size) for (y in 0 until size)
                 setPixel(x, y, if (bits[x, y]) Color.BLACK else Color.WHITE)
@@ -595,7 +493,10 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("My Address")
             .setMessage(address)
-            .setView(ImageView(this).apply { setImageBitmap(bmp); setPadding(32, 32, 32, 32) })
+            .setView(ImageView(this).apply {
+                setImageBitmap(bmp)
+                setPadding(32, 32, 32, 32)
+            })
             .setPositiveButton("Copy") { _, _ ->
                 val cm = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 cm.setPrimaryClip(android.content.ClipData.newPlainText("address", address))
@@ -606,11 +507,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchQrScanner() {
-        if (!hasPermission(Manifest.permission.CAMERA)) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+            != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), REQ_CAMERA)
             return
         }
-        startActivityForResult(Intent(this, QrScanActivity::class.java), REQ_QR_SCAN)
+        startActivityForResult(
+            Intent(this, QrScanActivity::class.java),
+            REQ_QR_SCAN
+        )
     }
 
     @Deprecated("Deprecated in Java")
