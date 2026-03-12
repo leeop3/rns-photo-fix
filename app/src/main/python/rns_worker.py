@@ -44,6 +44,8 @@ CMD_TXPOWER     = 0x03
 CMD_SF          = 0x04
 CMD_CR          = 0x05
 CMD_RADIO_STATE = 0x06
+CMD_DETECT      = 0x08
+CMD_READY       = 0x0F
 RADIO_STATE_ON  = 0x01
 
 def kiss_escape(data):
@@ -62,8 +64,13 @@ def kiss_cmd(cmd, data=b""):
 
 def configure_rnode(socket):
     RNS.log("Configuring RNode radio parameters...")
+    # 1. Detect / wake RNode
+    socket.write(kiss_cmd(CMD_DETECT, bytes([0x00])))
+    time.sleep(0.3)
+    # 2. Radio OFF — clean slate
     socket.write(kiss_cmd(CMD_RADIO_STATE, bytes([0x00])))
-    time.sleep(0.5)
+    time.sleep(0.8)
+    # 3. Set params
     socket.write(kiss_cmd(CMD_FREQUENCY, struct.pack(">I", 433025000)))
     time.sleep(0.2)
     socket.write(kiss_cmd(CMD_BANDWIDTH, struct.pack(">I", 31250)))
@@ -74,8 +81,12 @@ def configure_rnode(socket):
     time.sleep(0.2)
     socket.write(kiss_cmd(CMD_CR, bytes([6])))
     time.sleep(0.2)
+    # 4. Radio ON — starts RX immediately
     socket.write(kiss_cmd(CMD_RADIO_STATE, bytes([RADIO_STATE_ON])))
-    time.sleep(1.0)
+    time.sleep(1.5)
+    # 5. Signal ready
+    socket.write(kiss_cmd(CMD_READY, bytes([0x00])))
+    time.sleep(0.2)
     RNS.log("RNode radio configured and ON")
 
 class AndroidBTInterface(Interface):
@@ -140,11 +151,13 @@ class AndroidBTInterface(Interface):
                     pkt = bytes(self._kiss_buf[1:])
                     if len(pkt) > 0:
                         self.rxb += len(pkt)
-                        RNS.log(f"RX KISS port=0x{self._kiss_buf[0]:02x} len={len(pkt)}")
-                        try:
-                            self.owner.inbound(pkt, self)
-                        except Exception as e:
-                            RNS.log(f"inbound error: {e}")
+                        port = self._kiss_buf[0]
+                        RNS.log(f"RX KISS port=0x{port:02x} len={len(pkt)}")
+                        if port == CMD_DATA:
+                            try:
+                                self.owner.inbound(pkt, self)
+                            except Exception as e:
+                                RNS.log(f"inbound error: {e}")
                 self._kiss_buf = []
                 self._in_frame = True
                 self._escape   = False
@@ -311,12 +324,12 @@ def send_message(dest_hash_hex, text):
     if not lxmf_router or not destination:
         return "Not connected"
     try:
-        # Normalise — always work with plain hex, no brackets
+        # Normalise — always plain hex, no brackets
         dest_hash_hex = dest_hash_hex.strip().strip("<>")
         dest_hash = bytes.fromhex(dest_hash_hex)
         RNS.log(f"Sending to {dest_hash_hex}: {text}")
 
-        # Get identity from announce cache first, then RNS recall
+        # Get identity — cache first, then RNS recall
         with _data_lock:
             recalled_identity = known_identities.get(dest_hash_hex)
         if recalled_identity is None:
@@ -329,6 +342,8 @@ def send_message(dest_hash_hex, text):
             RNS.Transport.request_path(dest_hash)
             return "Unknown destination — ask them to tap Announce first"
 
+        # Build destination — hash MUST equal dest_hash_hex
+        # lxmf.delivery aspect produces the correct LXMF address hash
         lxmf_dest = RNS.Destination(
             recalled_identity,
             RNS.Destination.OUT,
@@ -336,7 +351,21 @@ def send_message(dest_hash_hex, text):
             "lxmf",
             "delivery"
         )
-        RNS.log(f"LXMF dest hash: {RNS.prettyhexrep(lxmf_dest.hash)}")
+        actual_hash = RNS.prettyhexrep(lxmf_dest.hash).strip("<>")
+        RNS.log(f"Built dest hash: {actual_hash}, target: {dest_hash_hex}")
+
+        # Verify hash matches — if not, the identity is wrong
+        if actual_hash != dest_hash_hex:
+            RNS.log(f"HASH MISMATCH! Built {actual_hash} but want {dest_hash_hex}")
+            # Try using dest_hash directly as the lxmf delivery hash
+            # Some peers use a different derivation — send via raw packet path
+            return f"Hash mismatch: got {actual_hash}, expected {dest_hash_hex}. Try re-scanning their address."
+
+        # Request path before sending — helps on LoRa single-hop
+        if not RNS.Transport.has_path(lxmf_dest.hash):
+            RNS.log("No path known, requesting before send...")
+            RNS.Transport.request_path(lxmf_dest.hash)
+            time.sleep(1.0)  # brief wait for path response
 
         msg = LXMF.LXMessage(
             lxmf_dest,
