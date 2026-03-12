@@ -192,9 +192,17 @@ class AndroidBTInterface(Interface):
 
 def message_received(message):
     sender = RNS.prettyhexrep(message.source_hash)
-    text = message.content_as_string()
     ts = time.strftime("%H:%M:%S")
-    RNS.log(f"MSG RECEIVED from {sender}: {text}")
+    try:
+        raw = message.content
+        if isinstance(raw, bytes):
+            text = raw.decode("utf-8")
+        else:
+            text = message.content_as_string()
+    except Exception:
+        text = message.content_as_string()
+    is_image = text.startswith("IMG:")
+    RNS.log(f"MSG RECEIVED from {sender}: {'[IMAGE]' if is_image else text}")
     entry = {"from": sender, "text": text, "ts": ts, "direction": "in"}
     chat_messages.append(entry)
 
@@ -359,13 +367,24 @@ def send_message(dest_hash_hex, text):
         if not RNS.Transport.has_path(lxmf_dest.hash):
             RNS.log("No path, will try DIRECT anyway (single-hop LoRa)")
 
-        msg = LXMF.LXMessage(
-            lxmf_dest,
-            destination,
-            text,
-            title="",
-            desired_method=method
-        )
+        # For image payloads, send as raw bytes to avoid encoding issues
+        if text.startswith("IMG:"):
+            msg_content = text.encode("utf-8")
+            msg = LXMF.LXMessage(
+                lxmf_dest,
+                destination,
+                msg_content,
+                title="",
+                desired_method=method
+            )
+        else:
+            msg = LXMF.LXMessage(
+                lxmf_dest,
+                destination,
+                text,
+                title="",
+                desired_method=method
+            )
         msg.register_delivery_callback(lambda m: RNS.log(f"Delivered! state={m.state}"))
         msg.register_failed_callback(lambda m: RNS.log(f"Failed! state={m.state}"))
         lxmf_router.handle_outbound(msg)

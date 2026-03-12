@@ -16,7 +16,15 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
+import android.app.Activity
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.provider.MediaStore
+import android.util.Base64
+import android.widget.ImageView
 import kotlinx.coroutines.*
+import java.io.ByteArrayOutputStream
 
 class MainActivity : AppCompatActivity() {
 
@@ -39,6 +47,8 @@ class MainActivity : AppCompatActivity() {
     private var lastMessageCount = 0
     private var lastAnnounceCount = 0
     private val btService = BluetoothService()
+    private lateinit var btnCamera: Button
+    private val REQUEST_IMAGE_CAPTURE = 1001
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -59,6 +69,13 @@ class MainActivity : AppCompatActivity() {
         etMessage          = findViewById(R.id.etMessage)
         btnSend            = findViewById(R.id.btnSend)
 
+        // Camera button — added programmatically next to Send
+        btnCamera = Button(this).apply {
+            text = "Cam"
+            setBackgroundColor(Color.parseColor("#0f3460"))
+            setTextColor(Color.parseColor("#00d4ff"))
+        }
+
         if (!Python.isStarted()) {
             Python.start(AndroidPlatform(this))
         }
@@ -75,6 +92,27 @@ class MainActivity : AppCompatActivity() {
             scope.launch(Dispatchers.IO) {
                 val result = RNSBridge.sendMessage(dest, text)
                 withContext(Dispatchers.Main) { toast(result); refreshMessages() }
+            }
+        }
+
+        // Insert camera button into the same row as Send button
+        (btnSend.parent as? android.view.ViewGroup)?.let { parent ->
+            val params = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).also { it.setMargins(8, 0, 0, 0) }
+            btnCamera.layoutParams = params
+            parent.addView(btnCamera)
+        }
+
+        btnCamera.setOnClickListener {
+            val dest = etDestHash.text.toString().trim()
+            if (dest.isEmpty()) { toast("Enter a destination address first"); return@setOnClickListener }
+            val takePicture = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+            if (takePicture.resolveActivity(packageManager) != null) {
+                startActivityForResult(takePicture, REQUEST_IMAGE_CAPTURE)
+            } else {
+                toast("No camera app found")
             }
         }
 
@@ -185,17 +223,38 @@ class MainActivity : AppCompatActivity() {
             wrapper.addView(senderLabel)
         }
 
-        wrapper.addView(TextView(this).apply {
-            this.text = text
-            textSize = 14f
-            setTextColor(Color.WHITE)
-            setPadding(16, 10, 16, 10)
-            setBackgroundColor(if (isOutgoing) Color.parseColor("#0f3460") else Color.parseColor("#1a3a1a"))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { lp -> lp.gravity = if (isOutgoing) Gravity.END else Gravity.START }
-        })
+        if (text.startsWith("IMG:")) {
+            try {
+                val b64 = text.removePrefix("IMG:")
+                val bytes = Base64.decode(b64, Base64.NO_WRAP)
+                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                wrapper.addView(ImageView(this).apply {
+                    setImageBitmap(bmp)
+                    adjustViewBounds = true
+                    layoutParams = LinearLayout.LayoutParams(300, LinearLayout.LayoutParams.WRAP_CONTENT)
+                        .also { lp -> lp.gravity = if (isOutgoing) Gravity.END else Gravity.START }
+                    setPadding(4, 4, 4, 4)
+                })
+            } catch (e: Exception) {
+                wrapper.addView(TextView(this).apply {
+                    this.text = "[Photo - decode error]"
+                    textSize = 12f
+                    setTextColor(Color.GRAY)
+                })
+            }
+        } else {
+            wrapper.addView(TextView(this).apply {
+                this.text = text
+                textSize = 14f
+                setTextColor(Color.WHITE)
+                setPadding(16, 10, 16, 10)
+                setBackgroundColor(if (isOutgoing) Color.parseColor("#0f3460") else Color.parseColor("#1a3a1a"))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).also { lp -> lp.gravity = if (isOutgoing) Gravity.END else Gravity.START }
+            })
+        }
 
         wrapper.addView(TextView(this).apply {
             this.text = ts
@@ -354,6 +413,34 @@ class MainActivity : AppCompatActivity() {
                     toast("Ready!")
                     startPolling()
                 }
+            }
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_IMAGE_CAPTURE && resultCode == Activity.RESULT_OK) {
+            val thumbnail = data?.extras?.get("data") as? Bitmap ?: return
+            val dest = etDestHash.text.toString().trim()
+
+            // Resize to max 120px wide, compress JPEG quality 25
+            val maxW = 120
+            val scale = maxW.toFloat() / thumbnail.width
+            val w = maxW
+            val h = (thumbnail.height * scale).toInt().coerceAtLeast(1)
+            val small = Bitmap.createScaledBitmap(thumbnail, w, h, true)
+
+            val baos = ByteArrayOutputStream()
+            small.compress(Bitmap.CompressFormat.JPEG, 25, baos)
+            val b64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+            val payload = "IMG:$b64"
+
+            val sizeKb = baos.size() / 1024
+            toast("Sending photo (${sizeKb}KB)...")
+
+            scope.launch(Dispatchers.IO) {
+                val result = RNSBridge.sendMessage(dest, payload)
+                withContext(Dispatchers.Main) { toast(result) }
             }
         }
     }
