@@ -23,7 +23,7 @@ known_identities = {}  # hash_hex -> RNS.Identity, populated from announces
 RNS_CONFIG = """
 [reticulum]
   enable_transport = True
-  share_instance = False
+  share_instance = True
   shared_instance_port = 37428
   instance_control_port = 37429
   panic_on_interface_error = False
@@ -61,8 +61,7 @@ def kiss_cmd(cmd, data=b""):
 
 def configure_rnode(socket):
     RNS.log("Configuring RNode radio parameters...")
-    # Reset first to clear any stale config from previous session (e.g. Sideband)
-    socket.write(kiss_cmd(CMD_RADIO_STATE, bytes([0x00])))  # radio OFF
+    socket.write(kiss_cmd(CMD_RADIO_STATE, bytes([0x00])))  # radio OFF first
     time.sleep(0.5)
     socket.write(kiss_cmd(CMD_FREQUENCY, struct.pack(">I", 433025000)))
     time.sleep(0.2)
@@ -75,7 +74,7 @@ def configure_rnode(socket):
     socket.write(kiss_cmd(CMD_CR, bytes([6])))
     time.sleep(0.2)
     socket.write(kiss_cmd(CMD_RADIO_STATE, bytes([RADIO_STATE_ON])))
-    time.sleep(1.0)  # longer wait for radio to fully come up
+    time.sleep(1.0)
     RNS.log("RNode radio configured and ON")
 
 class AndroidBTInterface(Interface):
@@ -130,7 +129,7 @@ class AndroidBTInterface(Interface):
         for byte in data:
             if byte == KISS_FEND:
                 if self._in_frame and len(self._kiss_buf) > 1:
-                    if self._kiss_buf[0] == CMD_DATA:
+                    if (self._kiss_buf[0] & 0x0F) == CMD_DATA:  # ignore port nibble
                         pkt = bytes(self._kiss_buf[1:])
                         self.rxb += len(pkt)
                         self.owner.inbound(pkt, self)
@@ -208,10 +207,14 @@ def _rns_main(bt_socket_wrapper):
         original_signal = signal.signal
         signal.signal = _noop_signal
 
+        # Create interface BEFORE Reticulum() so Transport binds it correctly
+        iface = AndroidBTInterface(RNS.Transport, "RNodeBT", bt_socket_wrapper)
+
         reticulum = RNS.Reticulum(configdir=configdir, loglevel=RNS.LOG_DEBUG)
 
-        iface = AndroidBTInterface(RNS.Transport, "RNodeBT", bt_socket_wrapper)
+        # Append after init — Transport is now running and will process inbound
         RNS.Transport.interfaces.append(iface)
+        time.sleep(0.5)  # give Transport time to register the interface
 
         files_dir = "/data/data/com.example.rnshello/files"
         os.makedirs(files_dir, exist_ok=True)
