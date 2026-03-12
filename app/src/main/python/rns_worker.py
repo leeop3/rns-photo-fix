@@ -249,9 +249,11 @@ def _rns_main(bt_socket_wrapper):
 def start(bt_socket_wrapper):
     global _rns_started
     if _rns_started:
+        # Already started or starting — wait for it to finish then return result
+        _start_done.wait(timeout=30)
         if destination:
             return RNS.prettyhexrep(destination.hash)
-        return "Error: already started but no address"
+        return _start_result.get("error") or "Timeout"
     _rns_started = True
     _start_done.clear()
     _start_result["addr"] = None
@@ -339,16 +341,3 @@ def get_announces():
 def get_address():
     global destination
     return RNS.prettyhexrep(destination.hash) if destination else "Not initialized"
-
-def announce():
-    """Manual on-demand announce — called from UI button only."""
-    try:
-        if destination:
-            destination.announce()
-            addr = RNS.prettyhexrep(destination.hash)
-            RNS.log(f"Manual announce sent: {addr}")
-            return f"Announced! {addr}"
-        return "Not ready yet"
-    except Exception as e:
-        RNS.log(f"Manual announce error: {e}")
-        return f"Error: {e}"
