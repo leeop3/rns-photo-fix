@@ -129,10 +129,15 @@ class AndroidBTInterface(Interface):
         for byte in data:
             if byte == KISS_FEND:
                 if self._in_frame and len(self._kiss_buf) > 1:
-                    if (self._kiss_buf[0] & 0x0F) == CMD_DATA:  # ignore port nibble
-                        pkt = bytes(self._kiss_buf[1:])
+                    # Pass ALL frames regardless of port byte — Sideband compatibility
+                    pkt = bytes(self._kiss_buf[1:])
+                    if len(pkt) > 0:
                         self.rxb += len(pkt)
-                        self.owner.inbound(pkt, self)
+                        RNS.log(f"RX KISS port=0x{self._kiss_buf[0]:02x} len={len(pkt)}")
+                        try:
+                            self.owner.inbound(pkt, self)
+                        except Exception as e:
+                            RNS.log(f"inbound error: {e}")
                 self._kiss_buf = []
                 self._in_frame = True
                 self._escape   = False
@@ -195,8 +200,8 @@ def _noop_signal(sig, handler):
     pass
 
 def incoming_link_established(link):
-    RNS.log(f"Incoming link established from {link}")
-    link.set_packet_callback(lambda msg, pkt: RNS.log(f"Link packet: {len(msg)} bytes"))
+    RNS.log(f"Incoming link from {link}")
+    link.set_packet_callback(lambda msg, pkt: RNS.log(f"Link packet {len(msg)} bytes"))
 
 def _rns_main(bt_socket_wrapper):
     global destination, lxmf_router, reticulum
@@ -211,10 +216,8 @@ def _rns_main(bt_socket_wrapper):
         original_signal = signal.signal
         signal.signal = _noop_signal
 
-        # Interface must exist before Reticulum() starts Transport
         iface = AndroidBTInterface(RNS.Transport, "RNodeBT", bt_socket_wrapper)
         RNS.Transport.interfaces.append(iface)
-
         reticulum = RNS.Reticulum(configdir=configdir, loglevel=RNS.LOG_DEBUG)
 
         files_dir = "/data/data/com.example.rnshello/files"
