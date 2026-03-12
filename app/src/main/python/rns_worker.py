@@ -207,26 +207,89 @@ def message_received(message):
     with _data_lock:
         chat_messages.append({"from": sender, "text": text or "(empty)", "ts": ts, "direction": "in"})
 
+def _msgpack_decode_first(data):
+    """
+    Pure-Python minimal msgpack decoder — no external library needed.
+    Decodes only the first value from data, returns (value, bytes_consumed).
+    Handles the types actually used in LXMF app_data:
+      fixarray, bin8, bin16, str8, fixstr, nil, bool, int types.
+
+    Sideband app_data format: fixarray[2] = [name_bytes, nil]
+      b'\\x92\\xc4\\x0eAnonymous Peer\\xc0'
+      \\x92       fixarray len 2
+      \\xc4\\x0e  bin8, 14 bytes
+      ...name...
+      \\xc0       nil
+    """
+    if not data:
+        raise ValueError("empty")
+    b = data[0]
+    # nil
+    if b == 0xc0:
+        return (None, 1)
+    # bool
+    if b == 0xc2:
+        return (False, 1)
+    if b == 0xc3:
+        return (True, 1)
+    # positive fixint
+    if b <= 0x7f:
+        return (b, 1)
+    # fixstr (0xa0-0xbf)
+    if 0xa0 <= b <= 0xbf:
+        n = b & 0x1f
+        return (data[1:1+n].decode("utf-8", errors="replace"), 1+n)
+    # fixarray (0x90-0x9f)
+    if 0x90 <= b <= 0x9f:
+        count = b & 0x0f
+        items = []
+        pos = 1
+        for _ in range(count):
+            val, consumed = _msgpack_decode_first(data[pos:])
+            items.append(val)
+            pos += consumed
+        return (items, pos)
+    # bin8 (0xc4)
+    if b == 0xc4:
+        n = data[1]
+        return (data[2:2+n], 2+n)
+    # bin16 (0xc5)
+    if b == 0xc5:
+        n = (data[1] << 8) | data[2]
+        return (data[3:3+n], 3+n)
+    # str8 (0xd9)
+    if b == 0xd9:
+        n = data[1]
+        return (data[2:2+n].decode("utf-8", errors="replace"), 2+n)
+    # str16 (0xda)
+    if b == 0xda:
+        n = (data[1] << 8) | data[2]
+        return (data[3:3+n].decode("utf-8", errors="replace"), 3+n)
+    # uint8 (0xcc)
+    if b == 0xcc:
+        return (data[1], 2)
+    # uint16 (0xcd)
+    if b == 0xcd:
+        return ((data[1] << 8) | data[2], 3)
+    raise ValueError(f"Unsupported msgpack byte 0x{b:02x}")
+
 def _decode_lxmf_app_data(app_data):
     """
-    LXMF announce app_data is msgpack-encoded as [name_bytes, None].
-    Sideband example: b'\\x92\\xc4\\x0eAnonymous Peer\\xc0'
-      \\x92       = fixarray len 2
-      \\xc4\\x0e  = bin8, 14 bytes
-      ...name...
-      \\xc0       = nil
-    We try msgpack first, fall back to plain UTF-8.
+    Decode LXMF announce app_data.
+    Sideband encodes it as msgpack fixarray[name_bytes, nil].
+    Uses pure Python decoder — no external library required.
+    Falls back to plain UTF-8 if not valid msgpack.
     """
     if not app_data:
         return ""
-    # Try msgpack decode
     try:
-        import msgpack
-        decoded = msgpack.unpackb(app_data, raw=True)
-        if isinstance(decoded, (list, tuple)) and len(decoded) >= 1:
+        decoded, _ = _msgpack_decode_first(app_data)
+        if isinstance(decoded, list) and len(decoded) >= 1:
             name_part = decoded[0]
             if isinstance(name_part, bytes):
                 return name_part.decode("utf-8", errors="replace")
+            elif isinstance(name_part, str):
+                return name_part
             elif name_part is not None:
                 return str(name_part)
     except Exception:
