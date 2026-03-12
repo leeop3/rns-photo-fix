@@ -220,14 +220,13 @@ def _rns_main(bt_socket_wrapper):
         with open(os.path.join(configdir, "config"), "w") as f:
             f.write(RNS_CONFIG)
 
+        # Suppress signal() calls — we're on a background thread, not main
         original_signal = signal.signal
         signal.signal = _noop_signal
 
         iface = AndroidBTInterface(RNS.Transport, "RNodeBT", bt_socket_wrapper)
         RNS.Transport.interfaces.append(iface)
         reticulum = RNS.Reticulum(configdir=configdir, loglevel=RNS.LOG_DEBUG)
-
-        signal.signal = original_signal
 
         files_dir = "/data/data/com.example.rnshello/files"
         os.makedirs(files_dir, exist_ok=True)
@@ -251,10 +250,12 @@ def _rns_main(bt_socket_wrapper):
             except Exception as se:
                 RNS.log(f"Identity save error: {se}")
 
+        # LXMRouter also calls signal.signal internally — keep noop active through init
         lxmf_router = LXMF.LXMRouter(
             storagepath="/data/data/com.example.rnshello/files/lxmf",
             autopeer=True
         )
+        signal.signal = original_signal
 
         destination = lxmf_router.register_delivery_identity(
             identity,
