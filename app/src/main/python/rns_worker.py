@@ -210,14 +210,27 @@ def _rns_main(bt_socket_wrapper):
         iface = AndroidBTInterface(RNS.Transport, "RNodeBT", bt_socket_wrapper)
         RNS.Transport.interfaces.append(iface)
 
-        identity_path = "/data/data/com.example.rnshello/files/identity"
+        files_dir = "/data/data/com.example.rnshello/files"
+        os.makedirs(files_dir, exist_ok=True)
+        identity_path = os.path.join(files_dir, "identity")
+        identity = None
         if os.path.exists(identity_path):
-            identity = RNS.Identity.from_file(identity_path)
-            RNS.log("Loaded existing identity")
-        else:
+            try:
+                identity = RNS.Identity.from_file(identity_path)
+                if identity is not None:
+                    RNS.log(f"Loaded existing identity: {RNS.prettyhexrep(identity.hash)}")
+                else:
+                    RNS.log("Identity file corrupt, recreating")
+            except Exception as ie:
+                RNS.log(f"Identity load error: {ie}, recreating")
+                identity = None
+        if identity is None:
             identity = RNS.Identity()
-            identity.to_file(identity_path)
-            RNS.log("Created new identity")
+            try:
+                identity.to_file(identity_path)
+                RNS.log(f"Created and saved new identity: {RNS.prettyhexrep(identity.hash)}")
+            except Exception as se:
+                RNS.log(f"Identity save error: {se}")
 
         lxmf_router = LXMF.LXMRouter(
             storagepath="/data/data/com.example.rnshello/files/lxmf",
@@ -339,3 +352,16 @@ def get_announces():
 def get_address():
     global destination
     return RNS.prettyhexrep(destination.hash) if destination else "Not initialized"
+
+def announce():
+    """Manual on-demand announce — called from UI button only."""
+    try:
+        if destination:
+            destination.announce()
+            addr = RNS.prettyhexrep(destination.hash)
+            RNS.log(f"Manual announce sent: {addr}")
+            return f"Announced! {addr}"
+        return "Not ready yet"
+    except Exception as e:
+        RNS.log(f"Manual announce error: {e}")
+        return f"Error: {e}"
