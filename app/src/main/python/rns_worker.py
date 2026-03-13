@@ -20,6 +20,7 @@ _data_lock    = threading.Lock()
 chat_messages = deque(maxlen=500)   # FIX: was unbounded list, now capped
 seen_announces = []
 known_identities = {}  # plain hex (no <>) -> RNS.Identity
+active_links  = {}     # plain hex -> RNS.Link (most recent active link per peer)
 
 RNS_CONFIG = """
 [reticulum]
@@ -368,7 +369,22 @@ class RawAnnounceHandler:
         RNS.log(f"*** RAW ANNOUNCE: {RNS.prettyhexrep(destination_hash)} app_data={app_data}")
 
 def incoming_link_established(link):
-    RNS.log(f"Incoming link: {link}")
+    """
+    Called when a remote peer opens a link to us.
+    Store it so send_image can reuse it instead of opening a competing link.
+    """
+    peer_hash = RNS.prettyhexrep(link.destination.hash).strip("<>") if link.destination else None
+    RNS.log(f"Incoming link established from {peer_hash}: {link}")
+    if peer_hash:
+        with _data_lock:
+            active_links[peer_hash] = link
+        # When link closes, remove from cache
+        def on_close(lnk):
+            with _data_lock:
+                if active_links.get(peer_hash) is lnk:
+                    del active_links[peer_hash]
+            RNS.log(f"Link to {peer_hash} closed")
+        link.set_link_closed_callback(on_close)
 
 def _noop_signal(sig, handler):
     pass
@@ -624,11 +640,6 @@ def send_image(dest_hash_hex, jpeg_b64):
         kb = len(img_bytes) / 1024
         RNS.log(f"Sending WebP image to {dest_hash_hex}: {kb:.1f} KB")
 
-        # 'ia' is the standard image field key in LXMF, format: [format_string, raw_bytes]
-        # Sideband-compatible.
-        # Use OPPORTUNISTIC — LXMF will auto-upgrade to link-based transfer
-        # if the payload exceeds the single-packet limit. MAX_DELIVERY_ATTEMPTS
-        # is patched to 20 above, giving the link handshake enough tries.
         msg = LXMF.LXMessage(
             lxmf_dest,
             destination,
@@ -637,9 +648,29 @@ def send_image(dest_hash_hex, jpeg_b64):
             desired_method=LXMF.LXMessage.OPPORTUNISTIC,
             fields={"ia": ["webp", img_bytes]}
         )
-
         msg.register_delivery_callback(lambda m: RNS.log(f"Image delivered! state={m.state}"))
         msg.register_failed_callback(lambda m: RNS.log(f"Image failed! state={m.state}"))
+
+        # If the peer already has an active link open to us, reuse it to avoid
+        # a simultaneous link-open collision (both sides sending link requests
+        # at the same time — neither responds to the other's).
+        with _data_lock:
+            existing_link = active_links.get(dest_hash_hex)
+
+        if existing_link and existing_link.status == RNS.Link.ACTIVE:
+            RNS.log(f"Reusing existing active link to {dest_hash_hex}")
+            try:
+                msg.set_delivery_via(existing_link)
+            except Exception as e:
+                RNS.log(f"set_delivery_via not supported: {e} — falling back to handle_outbound")
+        else:
+            # No active link — random backoff before initiating to reduce
+            # chance of a simultaneous link-open collision with the remote side.
+            import random
+            backoff = random.uniform(1.0, 4.0)
+            RNS.log(f"No active link to {dest_hash_hex}, backoff {backoff:.1f}s before link open")
+            time.sleep(backoff)
+
         lxmf_router.handle_outbound(msg)
 
         ts = time.strftime("%H:%M:%S")
