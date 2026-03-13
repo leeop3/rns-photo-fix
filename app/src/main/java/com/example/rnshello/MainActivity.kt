@@ -16,8 +16,13 @@ import android.os.Looper
 import android.util.Base64
 import android.view.Gravity
 import android.view.View
+import android.content.ClipData
+import android.graphics.BitmapFactory
+import android.net.Uri
+import android.provider.MediaStore
 import android.widget.*
 import android.widget.ImageButton
+import java.io.ByteArrayOutputStream
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -49,6 +54,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSend:            Button
     private lateinit var btnAnnounce:        Button
     private lateinit var btnSettings:        ImageButton
+    private lateinit var btnAttach:          ImageButton
 
     // ── State ─────────────────────────────────────────────────────────────────
 
@@ -59,6 +65,7 @@ class MainActivity : AppCompatActivity() {
     private val btService         = BluetoothService()
     private val scope             = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var myAddress         = ""
+    private var pendingImageBase64: String? = null  // set while image picked, cleared after send
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -74,6 +81,7 @@ class MainActivity : AppCompatActivity() {
         setupSendButton()
         setupAnnounceButton()
         setupSettingsButton()
+        setupAttachButton()
         requestPermissions()
     }
 
@@ -105,6 +113,7 @@ class MainActivity : AppCompatActivity() {
         btnSend            = findViewById(R.id.btnSend)
         btnAnnounce        = findViewById(R.id.btnAnnounce)
         btnSettings        = findViewById(R.id.btnSettings)
+        btnAttach          = findViewById(R.id.btnAttach)
     }
 
     // ── UI setup ──────────────────────────────────────────────────────────────
@@ -338,7 +347,7 @@ class MainActivity : AppCompatActivity() {
 
         val trimmed = text.trim().trimStart('\u0000')
         wrapper.addView(
-            if (trimmed.startsWith("IMG:")) buildImageBubble(trimmed, isOutgoing)
+            if (trimmed.startsWith("IMG_B64:") || trimmed.startsWith("IMG:")) buildImageBubble(trimmed, isOutgoing)
             else buildTextBubble(trimmed, isOutgoing)
         )
 
@@ -373,8 +382,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildImageBubble(trimmed: String, isOutgoing: Boolean): View {
         return try {
-            val bytes = Base64.decode(trimmed.removePrefix("IMG:"), Base64.DEFAULT)
-            val bmp   = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            // Support both IMG_B64: (LXMF attachments) and legacy IMG: prefix
+            val b64 = when {
+                trimmed.startsWith("IMG_B64:") -> trimmed.removePrefix("IMG_B64:")
+                trimmed.startsWith("IMG:")     -> trimmed.removePrefix("IMG:")
+                else -> trimmed
+            }
+            val bytes = Base64.decode(b64, Base64.NO_WRAP)
+            val bmp   = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             ImageView(this).apply {
                 setImageBitmap(bmp)
                 adjustViewBounds = true
@@ -574,6 +589,115 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    // ── Image attach ─────────────────────────────────────────────────────────
+
+    private fun setupAttachButton() {
+        btnAttach.setOnClickListener {
+            val dest = etDestHash.text.toString().trim()
+            if (dest.isEmpty()) { toast("Enter a destination address first"); return@setOnClickListener }
+            showImageSourceDialog()
+        }
+    }
+
+    private fun showImageSourceDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Send image")
+            .setItems(arrayOf("📷 Take photo", "🖼️ Choose from gallery")) { _, which ->
+                when (which) {
+                    0 -> launchImageCamera()
+                    1 -> launchImageGallery()
+                }
+            }
+            .show()
+    }
+
+    private fun launchImageCamera() {
+        if (!hasPermission(Manifest.permission.CAMERA)) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), REQ_CAMERA)
+            return
+        }
+        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        if (intent.resolveActivity(packageManager) != null) {
+            startActivityForResult(intent, REQ_IMAGE_CAMERA)
+        } else {
+            toast("No camera app available")
+        }
+    }
+
+    private fun launchImageGallery() {
+        val intent = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
+        intent.type = "image/*"
+        startActivityForResult(intent, REQ_IMAGE_GALLERY)
+    }
+
+    /**
+     * Compress a bitmap to JPEG and return base64 string.
+     * Target ≤ 40 KB for LoRa — shrink until it fits or quality floor hit.
+     */
+    private fun compressToBase64(bmp: android.graphics.Bitmap): String {
+        val maxDim = 800
+        val scaled = if (bmp.width > maxDim || bmp.height > maxDim) {
+            val ratio = maxDim.toFloat() / maxOf(bmp.width, bmp.height)
+            android.graphics.Bitmap.createScaledBitmap(
+                bmp,
+                (bmp.width * ratio).toInt(),
+                (bmp.height * ratio).toInt(),
+                true
+            )
+        } else bmp
+
+        var quality = 70
+        var bytes: ByteArray
+        do {
+            val out = ByteArrayOutputStream()
+            scaled.compress(android.graphics.Bitmap.CompressFormat.JPEG, quality, out)
+            bytes = out.toByteArray()
+            quality -= 10
+        } while (bytes.size > 40 * 1024 && quality > 20)
+
+        val kb = bytes.size / 1024f
+        if (kb > 50) toast("⚠️ Image is ${kb.toInt()} KB — may be slow over LoRa")
+        return android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+    }
+
+    private fun handleImageResult(bmp: android.graphics.Bitmap) {
+        val dest = etDestHash.text.toString().trim()
+        if (dest.isEmpty()) { toast("No destination set"); return }
+
+        toast("Compressing image…")
+        scope.launch(Dispatchers.IO) {
+            val b64 = compressToBase64(bmp)
+            val kb  = (b64.length * 3 / 4) / 1024
+            withContext(Dispatchers.Main) {
+                // Show preview + confirm dialog
+                val preview = ImageView(this@MainActivity).apply {
+                    val previewBytes = android.util.Base64.decode(b64, android.util.Base64.NO_WRAP)
+                    setImageBitmap(BitmapFactory.decodeByteArray(previewBytes, 0, previewBytes.size))
+                    adjustViewBounds = true
+                    setPadding(16, 16, 16, 8)
+                }
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Send image? (~${kb} KB)")
+                    .setMessage("Sending over LoRa may take ${if (kb > 20) "several minutes" else "a minute"}.")
+                    .setView(preview)
+                    .setPositiveButton("📤 Send") { _, _ ->
+                        scope.launch(Dispatchers.IO) {
+                            val result = RNSBridge.sendImage(dest, b64)
+                            withContext(Dispatchers.Main) {
+                                toast(result)
+                                if (result.startsWith("Image sent")) {
+                                    lastMessageCount = 0
+                                    refreshMessages()
+                                }
+                            }
+                        }
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+        }
+    }
+
     // ── Settings ─────────────────────────────────────────────────────────────
 
     private fun setupSettingsButton() {
@@ -679,13 +803,34 @@ class MainActivity : AppCompatActivity() {
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (requestCode == REQ_QR_SCAN && resultCode == Activity.RESULT_OK) {
-            val scanned = data?.getStringExtra("SCAN_RESULT")?.trim() ?: return
-            etDestHash.setText(scanned)
-            showTab("chat")
-            toast("Address scanned!")
-        } else {
-            super.onActivityResult(requestCode, resultCode, data)
+        when {
+            requestCode == REQ_QR_SCAN && resultCode == Activity.RESULT_OK -> {
+                val scanned = data?.getStringExtra("SCAN_RESULT")?.trim() ?: return
+                etDestHash.setText(scanned)
+                showTab("chat")
+                toast("Address scanned!")
+            }
+            requestCode == REQ_IMAGE_CAMERA && resultCode == Activity.RESULT_OK -> {
+                val bmp = data?.extras?.get("data") as? android.graphics.Bitmap
+                if (bmp != null) {
+                    handleImageResult(bmp)
+                } else {
+                    toast("Could not get image from camera")
+                }
+            }
+            requestCode == REQ_IMAGE_GALLERY && resultCode == Activity.RESULT_OK -> {
+                val uri: Uri = data?.data ?: return
+                try {
+                    val stream = contentResolver.openInputStream(uri)
+                    val bmp = BitmapFactory.decodeStream(stream)
+                    stream?.close()
+                    if (bmp != null) handleImageResult(bmp)
+                    else toast("Could not decode image")
+                } catch (e: Exception) {
+                    toast("Gallery error: ${e.message}")
+                }
+            }
+            else -> super.onActivityResult(requestCode, resultCode, data)
         }
     }
 
@@ -728,8 +873,10 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 
     companion object {
-        const val REQ_CAMERA      = 101
-        const val REQ_QR_SCAN     = 102
-        const val REQ_PERMISSIONS = 1
+        const val REQ_CAMERA       = 101
+        const val REQ_QR_SCAN      = 102
+        const val REQ_PERMISSIONS  = 1
+        const val REQ_IMAGE_CAMERA = 103
+        const val REQ_IMAGE_GALLERY= 104
     }
 }

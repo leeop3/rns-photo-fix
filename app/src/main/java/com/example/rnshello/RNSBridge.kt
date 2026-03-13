@@ -61,6 +61,16 @@ object RNSBridge {
         "save_rnode_config", frequency, bandwidth, txpower, sf, cr
     ).toString()
 
+    // ── Image sending ─────────────────────────────────────────────────────────
+
+    /**
+     * Send a JPEG image via LXMF FIELD_FILE_ATTACHMENTS.
+     * [jpegBase64] is a base64-encoded JPEG string (no data: prefix).
+     * Returns "Image sent (X KB)" or an error string.
+     */
+    fun sendImage(destHashHex: String, jpegBase64: String): String =
+        worker.callAttr("send_image", destHashHex, jpegBase64).toString()
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private fun PyObject.toStringMapList(): List<Map<String, String>> =

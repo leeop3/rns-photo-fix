@@ -188,8 +188,35 @@ class AndroidBTInterface(Interface):
             RNS.log(f"BT write error: {e}")
 
 def message_received(message):
+    import base64 as _b64
     sender = RNS.prettyhexrep(message.source_hash).strip("<>")
-    # Try all ways to get content
+    ts = time.strftime("%H:%M:%S")
+
+    # ── Check for image attachment first (Sideband-compatible) ────────────────
+    # LXMF.FIELD_FILE_ATTACHMENTS = 0x04
+    # Format: list of [filename, bytes]
+    FIELD_FILE_ATTACHMENTS = 0x04
+    try:
+        fields = message.fields or {}
+        if FIELD_FILE_ATTACHMENTS in fields:
+            attachments = fields[FIELD_FILE_ATTACHMENTS]
+            if attachments:
+                filename, img_bytes = attachments[0][0], attachments[0][1]
+                if isinstance(img_bytes, (bytes, bytearray)) and len(img_bytes) > 0:
+                    b64 = _b64.b64encode(bytes(img_bytes)).decode("ascii")
+                    RNS.log(f"IMG RECEIVED from {sender}: {filename} ({len(img_bytes)} bytes)")
+                    with _data_lock:
+                        chat_messages.append({
+                            "from": sender,
+                            "text": f"IMG_B64:{b64}",
+                            "ts": ts,
+                            "direction": "in"
+                        })
+                    return
+    except Exception as e:
+        RNS.log(f"Attachment parse error: {e}")
+
+    # ── Regular text message ───────────────────────────────────────────────────
     text = ""
     try:
         text = message.content_as_string()
@@ -209,7 +236,6 @@ def message_received(message):
             text = message.title_as_string() or ""
         except:
             pass
-    ts = time.strftime("%H:%M:%S")
     RNS.log(f"MSG RECEIVED from {sender}: '{text}' (fields={message.fields})")
     with _data_lock:
         chat_messages.append({"from": sender, "text": text or "(empty)", "ts": ts, "direction": "in"})
@@ -550,6 +576,77 @@ def send_message(dest_hash_hex, text):
         import traceback
         RNS.log(f"send_message error: {traceback.format_exc()}")
         return f"Error: {e}"
+
+def send_image(dest_hash_hex, jpeg_b64):
+    """
+    Send a JPEG image using LXMF.FIELD_FILE_ATTACHMENTS.
+    jpeg_b64: base64-encoded JPEG bytes (string).
+    Sideband-compatible: fields = {0x04: [["photo.jpg", raw_bytes]]}
+    """
+    import base64 as _b64
+    global lxmf_router, destination, known_identities
+    if not lxmf_router or not destination:
+        return "Not connected"
+    try:
+        dest_hash_hex = dest_hash_hex.strip().strip("<>")
+        dest_hash = bytes.fromhex(dest_hash_hex)
+
+        with _data_lock:
+            recalled_identity = known_identities.get(dest_hash_hex)
+        if recalled_identity is None:
+            recalled_identity = RNS.Identity.recall(dest_hash)
+        if recalled_identity is None:
+            RNS.Transport.request_path(dest_hash)
+            return "Unknown destination — ask them to tap Announce first"
+
+        lxmf_dest = RNS.Destination(
+            recalled_identity,
+            RNS.Destination.OUT,
+            RNS.Destination.SINGLE,
+            "lxmf",
+            "delivery"
+        )
+        actual_hash = RNS.prettyhexrep(lxmf_dest.hash).strip("<>")
+        if actual_hash != dest_hash_hex:
+            return f"Hash mismatch: got {actual_hash}. Try re-scanning their address."
+
+        img_bytes = _b64.b64decode(jpeg_b64)
+        RNS.log(f"Sending image to {dest_hash_hex}: {len(img_bytes)} bytes")
+
+        # Size warning — LoRa is slow, large images will take minutes
+        kb = len(img_bytes) / 1024
+        if kb > 50:
+            RNS.log(f"Warning: image is {kb:.1f} KB — may be slow over LoRa")
+
+        FIELD_FILE_ATTACHMENTS = 0x04
+        msg = LXMF.LXMessage(
+            lxmf_dest,
+            destination,
+            "",
+            title="",
+            desired_method=LXMF.LXMessage.OPPORTUNISTIC,
+            fields={FIELD_FILE_ATTACHMENTS: [["photo.jpg", img_bytes]]}
+        )
+        msg.register_delivery_callback(lambda m: RNS.log(f"Image delivered! state={m.state}"))
+        msg.register_failed_callback(lambda m: RNS.log(f"Image failed! state={m.state}"))
+        lxmf_router.handle_outbound(msg)
+
+        ts = time.strftime("%H:%M:%S")
+        with _data_lock:
+            chat_messages.append({
+                "from": "me",
+                "text": f"IMG_B64:{jpeg_b64}",
+                "ts": ts,
+                "direction": "out"
+            })
+        size_str = f"{kb:.1f} KB"
+        return f"Image sent ({size_str})"
+
+    except Exception as e:
+        import traceback
+        RNS.log(f"send_image error: {traceback.format_exc()}")
+        return f"Error: {e}"
+
 
 def get_messages():
     with _data_lock:
