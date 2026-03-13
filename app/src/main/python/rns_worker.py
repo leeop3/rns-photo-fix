@@ -454,6 +454,13 @@ def _rns_main(bt_socket_wrapper):
             autopeer=True
         )
         signal.signal = original_signal
+        # LoRa link handshake needs more attempts than the default 5.
+        # Patch the class constant so all messages get more retries.
+        try:
+            LXMF.LXMRouter.MAX_DELIVERY_ATTEMPTS = 20
+            RNS.log("Patched LXMF MAX_DELIVERY_ATTEMPTS=20 for LoRa reliability")
+        except Exception as e:
+            RNS.log(f"Could not patch MAX_DELIVERY_ATTEMPTS: {e}")
 
         destination = lxmf_router.register_delivery_identity(
             identity,
@@ -578,15 +585,13 @@ def send_message(dest_hash_hex, text):
 
 def send_image(dest_hash_hex, jpeg_b64):
     """
-    Send a JPEG image using LXMF.FIELD_IMAGE (0x06).
-    jpeg_b64: base64-encoded JPEG bytes (string), already compressed by Kotlin side.
-    Sideband-compatible: fields = {0x04: [["photo.jpg", raw_bytes]]}
+    Send an image using LXMF.FIELD_IMAGE (0x06), Sideband-compatible.
+    jpeg_b64: base64-encoded WebP bytes (string), compressed by Kotlin side
+              to ~3-6 KB via WebP q22 @ 320px — mirrors Sideband's strategy.
 
-    LoRa delivery strategy:
-    - Use OPPORTUNISTIC so LXMF handles retries automatically.
-    - The link handshake over LoRa takes 10–30 s; LXMF's internal delivery
-      loop will keep trying until try_timeout (90 s here).
-    - The Kotlin side compresses to ≤ 10 KB before calling here.
+    Uses OPPORTUNISTIC method — auto-upgrades to link-based transfer if
+    payload exceeds single-packet limit. MAX_DELIVERY_ATTEMPTS patched to 20
+    at startup gives the LoRa link handshake enough retries to complete.
     """
     import base64 as _b64
     global lxmf_router, destination, known_identities
@@ -620,7 +625,10 @@ def send_image(dest_hash_hex, jpeg_b64):
         RNS.log(f"Sending WebP image to {dest_hash_hex}: {kb:.1f} KB")
 
         # LXMF.FIELD_IMAGE = 0x06, format: [format_string, raw_bytes]
-        # This is what Sideband uses — fully interoperable.
+        # Sideband-compatible.
+        # Use OPPORTUNISTIC — LXMF will auto-upgrade to link-based transfer
+        # if the payload exceeds the single-packet limit. MAX_DELIVERY_ATTEMPTS
+        # is patched to 20 above, giving the link handshake enough tries.
         msg = LXMF.LXMessage(
             lxmf_dest,
             destination,
@@ -629,12 +637,6 @@ def send_image(dest_hash_hex, jpeg_b64):
             desired_method=LXMF.LXMessage.OPPORTUNISTIC,
             fields={LXMF.FIELD_IMAGE: ["webp", img_bytes]}
         )
-        # Give LoRa link handshake plenty of time — default is often too short.
-        # 90 s covers: link request + proof + data transfer for a ~10 KB image.
-        try:
-            msg.try_timeout = 90.0
-        except Exception:
-            pass  # older LXMF versions may not support this attribute
 
         msg.register_delivery_callback(lambda m: RNS.log(f"Image delivered! state={m.state}"))
         msg.register_failed_callback(lambda m: RNS.log(f"Image failed! state={m.state}"))
