@@ -617,7 +617,7 @@ def send_image(dest_hash_hex, jpeg_b64):
 
         img_bytes = _b64.b64decode(jpeg_b64)
         kb = len(img_bytes) / 1024
-        RNS.log(f"Sending image to {dest_hash_hex}: {kb:.1f} KB")
+        RNS.log(f"Sending WebP image to {dest_hash_hex}: {kb:.1f} KB")
 
         # LXMF.FIELD_IMAGE = 0x06, format: [format_string, raw_bytes]
         # This is what Sideband uses — fully interoperable.
@@ -627,7 +627,7 @@ def send_image(dest_hash_hex, jpeg_b64):
             "",
             title="",
             desired_method=LXMF.LXMessage.OPPORTUNISTIC,
-            fields={LXMF.FIELD_IMAGE: ["jpg", img_bytes]}
+            fields={LXMF.FIELD_IMAGE: ["webp", img_bytes]}
         )
         # Give LoRa link handshake plenty of time — default is often too short.
         # 90 s covers: link request + proof + data transfer for a ~10 KB image.
