@@ -17,6 +17,7 @@ import android.util.Base64
 import android.view.Gravity
 import android.view.View
 import android.widget.*
+import android.widget.ImageButton
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -47,6 +48,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var etMessage:          EditText
     private lateinit var btnSend:            Button
     private lateinit var btnAnnounce:        Button
+    private lateinit var btnSettings:        ImageButton
 
     // ── State ─────────────────────────────────────────────────────────────────
 
@@ -71,6 +73,7 @@ class MainActivity : AppCompatActivity() {
         setupAddressBar()
         setupSendButton()
         setupAnnounceButton()
+        setupSettingsButton()
         requestPermissions()
     }
 
@@ -101,6 +104,7 @@ class MainActivity : AppCompatActivity() {
         etMessage          = findViewById(R.id.etMessage)
         btnSend            = findViewById(R.id.btnSend)
         btnAnnounce        = findViewById(R.id.btnAnnounce)
+        btnSettings        = findViewById(R.id.btnSettings)
     }
 
     // ── UI setup ──────────────────────────────────────────────────────────────
@@ -567,6 +571,77 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+            .show()
+    }
+
+    // ── Settings ─────────────────────────────────────────────────────────────
+
+    private fun setupSettingsButton() {
+        btnSettings.setOnClickListener { showSettingsDialog() }
+    }
+
+    private fun showSettingsDialog() {
+        val cfg = try { RNSBridge.getRnodeConfig() } catch (_: Exception) { emptyMap() }
+
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 8)
+        }
+
+        fun addRow(label: String, value: String, hint: String): EditText {
+            layout.addView(TextView(this).apply {
+                text      = label
+                textSize  = 12f
+                setTextColor(Color.GRAY)
+                setPadding(0, 12, 0, 2)
+            })
+            return EditText(this).apply {
+                setText(value)
+                this.hint = hint
+                setTextColor(Color.parseColor("#1a1a2e"))
+                setHintTextColor(Color.parseColor("#999999"))
+                setSingleLine(true)
+                inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                layout.addView(this)
+            }
+        }
+
+        val etFreq  = addRow("Frequency (Hz)",    cfg["frequency"] ?: "433025000", "e.g. 433025000")
+        val etBw    = addRow("Bandwidth (Hz)",    cfg["bandwidth"]  ?: "31250",     "e.g. 31250")
+        val etTx    = addRow("TX Power (0–17 dBm)", cfg["txpower"] ?: "17",        "0–17")
+        val etSf    = addRow("Spreading Factor (6–12)", cfg["sf"]  ?: "8",         "6–12")
+        val etCr    = addRow("Coding Rate (5–8)",  cfg["cr"]        ?: "6",        "5–8  (4/5 to 4/8)")
+
+        // Helper note
+        layout.addView(TextView(this).apply {
+            text     = "Changes apply on next Connect."
+            textSize = 11f
+            setTextColor(Color.parseColor("#999999"))
+            setPadding(0, 16, 0, 0)
+        })
+
+        AlertDialog.Builder(this)
+            .setTitle("⚙️ RNode Radio Settings")
+            .setView(layout)
+            .setPositiveButton("Save") { _, _ ->
+                try {
+                    val freq = etFreq.text.toString().trim().toInt()
+                    val bw   = etBw.text.toString().trim().toInt()
+                    val tx   = etTx.text.toString().trim().toInt()
+                    val sf   = etSf.text.toString().trim().toInt()
+                    val cr   = etCr.text.toString().trim().toInt()
+                    scope.launch(Dispatchers.IO) {
+                        val result = RNSBridge.saveRnodeConfig(freq, bw, tx, sf, cr)
+                        withContext(Dispatchers.Main) {
+                            if (result == "OK") toast("Settings saved — reconnect to apply")
+                            else toast(result)
+                        }
+                    }
+                } catch (_: NumberFormatException) {
+                    toast("All fields must be numbers")
+                }
+            }
+            .setNegativeButton("Cancel", null)
             .show()
     }
 

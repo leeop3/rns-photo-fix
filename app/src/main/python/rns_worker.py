@@ -63,23 +63,30 @@ def kiss_cmd(cmd, data=b""):
     return bytes([KISS_FEND, cmd]) + kiss_escape(data) + bytes([KISS_FEND])
 
 def configure_rnode(socket):
-    RNS.log("Configuring RNode radio parameters...")
+    import rnode_config as _rc
+    cfg = _rc.get()
+    freq  = cfg["frequency"]
+    bw    = cfg["bandwidth"]
+    txpwr = cfg["txpower"]
+    sf    = cfg["sf"]
+    cr    = cfg["cr"]
+    RNS.log(f"Configuring RNode: freq={freq} bw={bw} tx={txpwr} sf={sf} cr={cr}")
     # 1. Detect / wake RNode
     socket.write(kiss_cmd(CMD_DETECT, bytes([0x00])))
     time.sleep(0.3)
     # 2. Radio OFF — clean slate
     socket.write(kiss_cmd(CMD_RADIO_STATE, bytes([0x00])))
     time.sleep(0.8)
-    # 3. Set params
-    socket.write(kiss_cmd(CMD_FREQUENCY, struct.pack(">I", 433025000)))
+    # 3. Set params from saved config
+    socket.write(kiss_cmd(CMD_FREQUENCY, struct.pack(">I", freq)))
     time.sleep(0.2)
-    socket.write(kiss_cmd(CMD_BANDWIDTH, struct.pack(">I", 31250)))
+    socket.write(kiss_cmd(CMD_BANDWIDTH, struct.pack(">I", bw)))
     time.sleep(0.2)
-    socket.write(kiss_cmd(CMD_TXPOWER, bytes([17])))
+    socket.write(kiss_cmd(CMD_TXPOWER, bytes([txpwr])))
     time.sleep(0.2)
-    socket.write(kiss_cmd(CMD_SF, bytes([8])))
+    socket.write(kiss_cmd(CMD_SF, bytes([sf])))
     time.sleep(0.2)
-    socket.write(kiss_cmd(CMD_CR, bytes([6])))
+    socket.write(kiss_cmd(CMD_CR, bytes([cr])))
     time.sleep(0.2)
     # 4. Radio ON — starts RX immediately
     socket.write(kiss_cmd(CMD_RADIO_STATE, bytes([RADIO_STATE_ON])))
@@ -582,3 +589,15 @@ def get_contacts() -> list:
 
 def resolve_name(hash_hex: str, fallback: str = "") -> str:
     return _contacts_mod.resolve(hash_hex, fallback)
+
+# ── RNode config — bridge functions ───────────────────────────────────────────
+
+import rnode_config as _rnode_cfg_mod
+
+def get_rnode_config() -> dict:
+    return _rnode_cfg_mod.get()
+
+def save_rnode_config(frequency: int, bandwidth: int, txpower: int, sf: int, cr: int) -> str:
+    return _rnode_cfg_mod.save(
+        int(frequency), int(bandwidth), int(txpower), int(sf), int(cr)
+    )

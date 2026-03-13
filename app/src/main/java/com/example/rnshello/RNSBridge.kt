@@ -34,25 +34,32 @@ object RNSBridge {
 
     // ── Contacts ──────────────────────────────────────────────────────────────
 
-    /** Save or update a contact name for a given hash. */
     fun saveContact(hashHex: String, name: String): String =
         worker.callAttr("save_contact", hashHex, name).toString()
 
-    /** Delete a contact by hash. */
     fun deleteContact(hashHex: String): String =
         worker.callAttr("delete_contact", hashHex).toString()
 
-    /** Return all saved contacts as [{hash, name}] */
     fun getContacts(): List<Map<String, String>> =
         worker.callAttr("get_contacts").toStringMapList()
 
-    /**
-     * Resolve a hash to a friendly name at the UI layer only.
-     * RNS operations always use the raw hash — never this.
-     * [fallback] is typically the RNS announce display name.
-     */
     fun resolveName(hashHex: String, fallback: String = ""): String =
         worker.callAttr("resolve_name", hashHex, fallback).toString()
+
+    // ── RNode config ──────────────────────────────────────────────────────────
+
+    /** Returns current radio config as map: frequency, bandwidth, txpower, sf, cr */
+    fun getRnodeConfig(): Map<String, String> {
+        val raw = worker.callAttr("get_rnode_config")
+        return raw.asMap().entries.associate { (k, v) -> k.toString() to v.toString() }
+    }
+
+    /** Save new radio parameters. Returns "OK" or an error string. */
+    fun saveRnodeConfig(
+        frequency: Int, bandwidth: Int, txpower: Int, sf: Int, cr: Int
+    ): String = worker.callAttr(
+        "save_rnode_config", frequency, bandwidth, txpower, sf, cr
+    ).toString()
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 

@@ -13,14 +13,34 @@
         android:padding="12dp"
         android:background="#16213e">
 
-        <TextView
-            android:id="@+id/tvMyAddress"
+        <!-- Address row with settings gear -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="My address: not connected"
-            android:textColor="#00d4ff"
-            android:textSize="11sp"
-            android:fontFamily="monospace"/>
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:id="@+id/tvMyAddress"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="My address: not connected"
+                android:textColor="#00d4ff"
+                android:textSize="11sp"
+                android:fontFamily="monospace"/>
+
+            <ImageButton
+                android:id="@+id/btnSettings"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:src="@android:drawable/ic_menu_preferences"
+                android:background="@android:color/transparent"
+                android:tint="#00d4ff"
+                android:contentDescription="Settings"
+                android:layout_marginStart="8dp"/>
+
+        </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
