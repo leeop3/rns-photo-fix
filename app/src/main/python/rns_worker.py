@@ -193,12 +193,12 @@ def message_received(message):
     ts = time.strftime("%H:%M:%S")
 
     # ── Check for image field first (Sideband-compatible) ────────────────────
-    # LXMF.FIELD_IMAGE = 0x06
+    # 'ia' is the standard image field key in LXMF
     # Format: [format_string, raw_bytes]  e.g. ["jpg", b"..."]
     try:
         fields = message.fields or {}
-        if LXMF.FIELD_IMAGE in fields:
-            image_field = fields[LXMF.FIELD_IMAGE]
+        if "ia" in fields:
+            image_field = fields["ia"]
             img_fmt   = image_field[0]   # e.g. "jpg", "webp", "png"
             img_bytes = image_field[1]
             if isinstance(img_bytes, (bytes, bytearray)) and len(img_bytes) > 0:
@@ -585,7 +585,7 @@ def send_message(dest_hash_hex, text):
 
 def send_image(dest_hash_hex, jpeg_b64):
     """
-    Send an image using LXMF.FIELD_IMAGE (0x06), Sideband-compatible.
+    Send an image using the 'ia' field key (standard LXMF image attachment).
     jpeg_b64: base64-encoded WebP bytes (string), compressed by Kotlin side
               to ~3-6 KB via WebP q22 @ 320px — mirrors Sideband's strategy.
 
@@ -624,7 +624,7 @@ def send_image(dest_hash_hex, jpeg_b64):
         kb = len(img_bytes) / 1024
         RNS.log(f"Sending WebP image to {dest_hash_hex}: {kb:.1f} KB")
 
-        # LXMF.FIELD_IMAGE = 0x06, format: [format_string, raw_bytes]
+        # 'ia' is the standard image field key in LXMF, format: [format_string, raw_bytes]
         # Sideband-compatible.
         # Use OPPORTUNISTIC — LXMF will auto-upgrade to link-based transfer
         # if the payload exceeds the single-packet limit. MAX_DELIVERY_ATTEMPTS
@@ -635,7 +635,7 @@ def send_image(dest_hash_hex, jpeg_b64):
             "",
             title="",
             desired_method=LXMF.LXMessage.OPPORTUNISTIC,
-            fields={LXMF.FIELD_IMAGE: ["webp", img_bytes]}
+            fields={"ia": ["webp", img_bytes]}
         )
 
         msg.register_delivery_callback(lambda m: RNS.log(f"Image delivered! state={m.state}"))
