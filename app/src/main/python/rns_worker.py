@@ -198,8 +198,15 @@ def message_received(message):
     # Format: [format_string, raw_bytes]  e.g. ["jpg", b"..."]
     try:
         fields = message.fields or {}
-        if LXMF.FIELD_IMAGE in fields:
-            image_field = fields[LXMF.FIELD_IMAGE]
+        if LXMF.FIELD_IMAGE in fields or LXMF.FIELD_FILE_ATTACHMENTS in fields:
+            if LXMF.FIELD_FILE_ATTACHMENTS in fields:
+                att = fields[LXMF.FIELD_FILE_ATTACHMENTS]
+                if att and len(att) > 0:
+                    img_bytes = att[0][1] if len(att[0]) > 1 else None
+                    img_fmt = "webp"
+                    image_field = [img_fmt, img_bytes]
+            else:
+                image_field = fields[LXMF.FIELD_IMAGE]
             img_fmt   = image_field[0]   # e.g. "jpg", "webp", "png"
             img_bytes = image_field[1]
             if isinstance(img_bytes, (bytes, bytearray)) and len(img_bytes) > 0:
@@ -683,7 +690,7 @@ def send_image(dest_hash_hex, jpeg_b64):
             "",
             title="",
             desired_method=LXMF.LXMessage.OPPORTUNISTIC if RNS.Identity.current_ratchet_id(dest_hash) else LXMF.LXMessage.DIRECT,
-            fields={LXMF.FIELD_IMAGE: ["webp", img_bytes]}
+            fields={LXMF.FIELD_FILE_ATTACHMENTS: [["image.webp", img_bytes]]}
         )
         msg.register_delivery_callback(lambda m: RNS.log(f"Image delivered! state={m.state}"))
         msg.register_failed_callback(lambda m: RNS.log(f"Image failed! state={m.state}"))
