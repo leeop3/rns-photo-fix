@@ -649,37 +649,35 @@ def send_image(dest_hash_hex, jpeg_b64):
         kb = len(img_bytes) / 1024
         RNS.log(f"Sending WebP image to {dest_hash_hex}: {kb:.1f} KB")
 
+        # Send ping first to warm up the link, then send image
+        ping = LXMF.LXMessage(
+            lxmf_dest,
+            destination,
+            ".",
+            title="",
+            desired_method=LXMF.LXMessage.OPPORTUNISTIC
+        )
+        lxmf_router.handle_outbound(ping)
+        RNS.log(f"Ping sent to {dest_hash_hex}, waiting 15s for link...")
+        time.sleep(15)
+        with _data_lock:
+            existing_link = active_links.get(dest_hash_hex)
         msg = LXMF.LXMessage(
             lxmf_dest,
             destination,
             "",
             title="",
-            desired_method=LXMF.LXMessage.DIRECT,
+            desired_method=LXMF.LXMessage.OPPORTUNISTIC,
             fields={LXMF.FIELD_IMAGE: ["webp", img_bytes]}
         )
         msg.register_delivery_callback(lambda m: RNS.log(f"Image delivered! state={m.state}"))
         msg.register_failed_callback(lambda m: RNS.log(f"Image failed! state={m.state}"))
-
-        # If the peer already has an active link open to us, reuse it to avoid
-        # a simultaneous link-open collision (both sides sending link requests
-        # at the same time Ã¢â‚¬â€ neither responds to the other's).
-        with _data_lock:
-            existing_link = active_links.get(dest_hash_hex)
-
         if existing_link and existing_link.status == RNS.Link.ACTIVE:
-            RNS.log(f"Reusing existing active link to {dest_hash_hex}")
+            RNS.log(f"Link active, delivering image via link to {dest_hash_hex}")
             try:
                 msg.set_delivery_via(existing_link)
             except Exception as e:
-                RNS.log(f"set_delivery_via not supported: {e} Ã¢â‚¬â€ falling back to handle_outbound")
-        else:
-            # No active link Ã¢â‚¬â€ random backoff before initiating to reduce
-            # chance of a simultaneous link-open collision with the remote side.
-            import random
-            backoff = random.uniform(1.0, 4.0)
-            RNS.log(f"No active link to {dest_hash_hex}, backoff {backoff:.1f}s before link open")
-            time.sleep(backoff)
-
+                RNS.log(f"set_delivery_via failed: {e}")
         lxmf_router.handle_outbound(msg)
 
         ts = time.strftime("%H:%M:%S")
