@@ -484,7 +484,12 @@ def _rns_main(bt_socket_wrapper):
             display_name="RNS Hello Android"
         )
         destination.set_proof_strategy(RNS.Destination.PROVE_ALL)
-        lxmf_router.delivery_destination.set_link_established_callback(incoming_link_established)
+        try:
+            rns_dest = destination.destination if hasattr(destination, "destination") else destination
+            rns_dest.set_link_established_callback(incoming_link_established)
+            RNS.log("Link established callback set on RNS destination")
+        except Exception as e:
+            RNS.log(f"Could not set link callback: {e}")
         lxmf_router.register_delivery_callback(message_received)
         RNS.Transport.register_announce_handler(AnnounceHandler())
         RNS.Transport.register_announce_handler(RawAnnounceHandler())
