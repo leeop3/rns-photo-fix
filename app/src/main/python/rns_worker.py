@@ -645,7 +645,7 @@ def send_image(dest_hash_hex, jpeg_b64):
             "",
             title="",
             desired_method=LXMF.LXMessage.OPPORTUNISTIC,
-            fields={"ia": ["webp", compress_img(img_bytes)]}
+            fields={"ia": ["webp", img_bytes]}
         )
         msg.register_delivery_callback(lambda m: RNS.log(f"Image delivered! state={m.state}"))
         msg.register_failed_callback(lambda m: RNS.log(f"Image failed! state={m.state}"))
@@ -739,6 +739,7 @@ def save_rnode_config(frequency: int, bandwidth: int, txpower: int, sf: int, cr:
     return _rnode_cfg_mod.save(
         int(frequency), int(bandwidth), int(txpower), int(sf), int(cr)
     )
+
 
 
 

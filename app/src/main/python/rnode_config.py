@@ -1,5 +1,5 @@
-"""
-rnode_config.py — persisted RNode radio parameters.
+﻿"""
+rnode_config.py â€” persisted RNode radio parameters.
 Stores config as JSON. configure_rnode() in rns_worker.py reads from here
 instead of using hardcoded values.
 
@@ -20,10 +20,10 @@ _lock = threading.Lock()
 
 DEFAULTS = {
     "frequency": 433025000,   # Hz
-    "bandwidth":     31250,   # Hz
-    "txpower":          17,   # dBm  (0–17)
-    "sf":                8,   # Spreading factor (6–12)
-    "cr":                6,   # Coding rate denominator (5–8, meaning 4/5 to 4/8)
+    "bandwidth": 125000,   # Hz
+    "txpower":          17,   # dBm  (0â€“17)
+    "sf": 7,   # Spreading factor (6â€“12)
+    "cr":                6,   # Coding rate denominator (5â€“8, meaning 4/5 to 4/8)
 }
 
 _config: dict = {}
@@ -60,15 +60,15 @@ def save(frequency: int, bandwidth: int, txpower: int, sf: int, cr: int) -> str:
     """Validate and persist new radio parameters."""
     errors = []
     if not (400_000_000 <= frequency <= 510_000_000):
-        errors.append("Frequency must be between 400–510 MHz")
+        errors.append("Frequency must be between 400â€“510 MHz")
     if bandwidth not in (7800, 10400, 15600, 20800, 31250, 41700, 62500, 125000, 250000, 500000):
         errors.append("Invalid bandwidth value")
     if not (0 <= txpower <= 17):
-        errors.append("TX power must be 0–17 dBm")
+        errors.append("TX power must be 0â€“17 dBm")
     if not (6 <= sf <= 12):
-        errors.append("Spreading factor must be 6–12")
+        errors.append("Spreading factor must be 6â€“12")
     if not (5 <= cr <= 8):
-        errors.append("Coding rate must be 5–8 (meaning 4/5 to 4/8)")
+        errors.append("Coding rate must be 5â€“8 (meaning 4/5 to 4/8)")
     if errors:
         return "Error: " + "; ".join(errors)
 
@@ -83,3 +83,4 @@ def save(frequency: int, bandwidth: int, txpower: int, sf: int, cr: int) -> str:
 
 # Load on import
 _load()
+
