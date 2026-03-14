@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
     id 'com.chaquo.python'
@@ -24,6 +24,7 @@ android {
             pip {
                 install "rns"
                 install "lxmf"
+                install "Pillow"
             }
         }
     }
@@ -50,3 +51,4 @@ dependencies {
     implementation 'com.google.zxing:core:3.5.3'
     implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
 }
+
