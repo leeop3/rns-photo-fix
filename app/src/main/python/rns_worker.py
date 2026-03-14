@@ -484,7 +484,7 @@ def _rns_main(bt_socket_wrapper):
             display_name="RNS Hello Android"
         )
         destination.set_proof_strategy(RNS.Destination.PROVE_ALL)
-        destination.set_link_established_callback(incoming_link_established)
+        lxmf_router.delivery_destination.set_link_established_callback(incoming_link_established)
         lxmf_router.register_delivery_callback(message_received)
         RNS.Transport.register_announce_handler(AnnounceHandler())
         RNS.Transport.register_announce_handler(RawAnnounceHandler())
