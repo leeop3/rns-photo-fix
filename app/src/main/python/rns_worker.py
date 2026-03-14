@@ -557,8 +557,7 @@ def send_message(dest_hash_hex, text):
             time.sleep(2.0)
             recalled_identity = RNS.Identity.recall(dest_hash)
             
-        if recalled_identity is None:
-            return "Still no identity. Ask the other phone to tap Announce." Ã¢â‚¬â€ ask them to tap Announce first"
+            return "Still no identity. Ask the other phone to tap Announce first."
 
         # Build destination Ã¢â‚¬â€ hash MUST equal dest_hash_hex
         # lxmf.delivery aspect produces the correct LXMF address hash
@@ -633,8 +632,7 @@ def send_image(dest_hash_hex, jpeg_b64):
             time.sleep(2.0)
             recalled_identity = RNS.Identity.recall(dest_hash)
             
-        if recalled_identity is None:
-            return "Still no identity. Ask the other phone to tap Announce." Ã¢â‚¬â€ ask them to tap Announce first"
+            return "Still no identity. Ask the other phone to tap Announce first."
 
         lxmf_dest = RNS.Destination(
             recalled_identity,
