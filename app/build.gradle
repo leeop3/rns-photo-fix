@@ -24,7 +24,6 @@ android {
             pip {
                 install "rns"
                 install "lxmf"
-                install "Pillow"
             }
         }
     }
