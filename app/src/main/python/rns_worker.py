@@ -658,8 +658,16 @@ def send_image(dest_hash_hex, jpeg_b64):
             desired_method=LXMF.LXMessage.OPPORTUNISTIC
         )
         lxmf_router.handle_outbound(ping)
-        RNS.log(f"Ping sent to {dest_hash_hex}, waiting 15s for link...")
-        time.sleep(15)
+        RNS.log(f"Ping sent to {dest_hash_hex}, waiting for incoming link...")
+        # Wait up to 30s for the receiver to open a link back to us
+        for _ in range(30):
+            time.sleep(1)
+            with _data_lock:
+                if active_links.get(dest_hash_hex) and active_links[dest_hash_hex].status == RNS.Link.ACTIVE:
+                    RNS.log(f"Incoming link detected from {dest_hash_hex}, proceeding with image")
+                    break
+        else:
+            RNS.log(f"No incoming link after 30s, sending image anyway")
         with _data_lock:
             existing_link = active_links.get(dest_hash_hex)
         msg = LXMF.LXMessage(
