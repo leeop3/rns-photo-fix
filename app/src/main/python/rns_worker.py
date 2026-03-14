@@ -198,8 +198,8 @@ def message_received(message):
     # Format: [format_string, raw_bytes]  e.g. ["jpg", b"..."]
     try:
         fields = message.fields or {}
-        if "ia" in fields:
-            image_field = fields["ia"]
+        if LXMF.FIELD_IMAGE in fields:
+            image_field = fields[LXMF.FIELD_IMAGE]
             img_fmt   = image_field[0]   # e.g. "jpg", "webp", "png"
             img_bytes = image_field[1]
             if isinstance(img_bytes, (bytes, bytearray)) and len(img_bytes) > 0:
@@ -654,8 +654,8 @@ def send_image(dest_hash_hex, jpeg_b64):
             destination,
             "",
             title="",
-            desired_method=LXMF.LXMessage.OPPORTUNISTIC,
-            fields={"ia": ["webp", img_bytes]}
+            desired_method=LXMF.LXMessage.DIRECT,
+            fields={LXMF.FIELD_IMAGE: ["webp", img_bytes]}
         )
         msg.register_delivery_callback(lambda m: RNS.log(f"Image delivered! state={m.state}"))
         msg.register_failed_callback(lambda m: RNS.log(f"Image failed! state={m.state}"))
