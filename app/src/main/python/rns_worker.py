@@ -1,4 +1,4 @@
-﻿import RNS
+import RNS
 import LXMF
 import threading
 import signal

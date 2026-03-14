@@ -1,4 +1,4 @@
-﻿"""
+"""
 rnode_config.py â€” persisted RNode radio parameters.
 Stores config as JSON. configure_rnode() in rns_worker.py reads from here
 instead of using hardcoded values.
