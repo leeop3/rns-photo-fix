@@ -465,7 +465,7 @@ def _rns_main(bt_socket_wrapper):
                 RNS.log(f"Identity save error: {se}")
 
         # LXMRouter also calls signal.signal internally â€” keep noop active through init
-        lxmf_router = LXMF.LXMRouter(lxtimeout=45, storagepath="/data/data/com.example.rnshello/files/lxmf",
+        lxmf_router = LXMF.LXMRouter(storagepath="/data/data/com.example.rnshello/files/lxmf",
             autopeer=True
         )
         signal.signal = original_signal
@@ -739,6 +739,7 @@ def save_rnode_config(frequency: int, bandwidth: int, txpower: int, sf: int, cr:
     return _rnode_cfg_mod.save(
         int(frequency), int(bandwidth), int(txpower), int(sf), int(cr)
     )
+
 
 
 
