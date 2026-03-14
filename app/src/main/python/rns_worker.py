@@ -433,10 +433,10 @@ def _rns_main(bt_socket_wrapper):
         signal.signal = _noop_signal
 
         # FIX: init Reticulum FIRST, then attach interface
-        # Previously the interface was appended before RNS.Reticulum.set_link_timeout(45); RNS.Reticulum() was
+        # Previously the interface was appended before RNS.Reticulum() was
         # called, which risked Transport reinitialising and orphaning the
         # interface so inbound packets went nowhere.
-        reticulum = RNS.Reticulum.set_link_timeout(45); RNS.Reticulum(configdir=configdir, loglevel=RNS.LOG_DEBUG)
+        reticulum = RNS.Reticulum(configdir=configdir, loglevel=RNS.LOG_DEBUG)
 
         iface = AndroidBTInterface(RNS.Transport, "RNodeBT", bt_socket_wrapper)
         RNS.Transport.interfaces.append(iface)
@@ -465,7 +465,7 @@ def _rns_main(bt_socket_wrapper):
                 RNS.log(f"Identity save error: {se}")
 
         # LXMRouter also calls signal.signal internally â€” keep noop active through init
-        lxmf_router = LXMF.LXMRouter(lxtimeout=45, 
+        lxmf_router = LXMF.LXMRouter(lxtimeout=45, lxtimeout=45, 
             storagepath="/data/data/com.example.rnshello/files/lxmf",
             autopeer=True
         )
@@ -740,4 +740,5 @@ def save_rnode_config(frequency: int, bandwidth: int, txpower: int, sf: int, cr:
     return _rnode_cfg_mod.save(
         int(frequency), int(bandwidth), int(txpower), int(sf), int(cr)
     )
+
 
