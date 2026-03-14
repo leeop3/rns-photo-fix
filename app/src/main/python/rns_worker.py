@@ -373,7 +373,9 @@ def incoming_link_established(link):
     Called when a remote peer opens a link to us.
     Store it so send_image can reuse it instead of opening a competing link.
     """
-    peer_hash = RNS.prettyhexrep(link.destination.hash).strip("<>") if link.destination else None
+    peer_hash = None
+    if link.remote_identity:
+        peer_hash = RNS.prettyhexrep(RNS.Destination.hash_from_name_and_identity("lxmf.delivery", link.remote_identity)).strip("<>")
     RNS.log(f"Incoming link established from {peer_hash}: {link}")
     if peer_hash:
         with _data_lock:
@@ -470,13 +472,13 @@ def _rns_main(bt_socket_wrapper):
         )
         signal.signal = original_signal
         # LoRa link handshake needs more attempts than the default 5.
-        # Patch the class constant so all messages get more retries.
+        # Patch class constants for LoRa reliability
         try:
             LXMF.LXMRouter.MAX_DELIVERY_ATTEMPTS = 20
-            RNS.log("Patched LXMF MAX_DELIVERY_ATTEMPTS=20 for LoRa reliability")
+            RNS.Link.ESTABLISHMENT_TIMEOUT = 45
+            RNS.log("Patched MAX_DELIVERY_ATTEMPTS=20 and ESTABLISHMENT_TIMEOUT=45s")
         except Exception as e:
-            RNS.log(f"Could not patch MAX_DELIVERY_ATTEMPTS: {e}")
-
+            RNS.log(f"Could not patch constants: {e}")
         destination = lxmf_router.register_delivery_identity(
             identity,
             display_name="RNS Hello Android"
@@ -675,7 +677,7 @@ def send_image(dest_hash_hex, jpeg_b64):
             destination,
             "",
             title="",
-            desired_method=LXMF.LXMessage.OPPORTUNISTIC,
+            desired_method=LXMF.LXMessage.OPPORTUNISTIC if RNS.Identity.current_ratchet_id(dest_hash) else LXMF.LXMessage.DIRECT,
             fields={LXMF.FIELD_IMAGE: ["webp", img_bytes]}
         )
         msg.register_delivery_callback(lambda m: RNS.log(f"Image delivered! state={m.state}"))
