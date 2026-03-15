@@ -4,25 +4,26 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.bluetooth.BluetoothManager
+import android.content.ComponentName
 import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
+import android.provider.MediaStore
 import android.util.Base64
 import android.view.Gravity
 import android.view.View
-import android.content.ClipData
-import android.graphics.BitmapFactory
-import android.net.Uri
-import android.provider.MediaStore
 import android.widget.*
 import android.widget.ImageButton
-import java.io.ByteArrayOutputStream
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -31,6 +32,7 @@ import com.chaquo.python.android.AndroidPlatform
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.MultiFormatWriter
 import kotlinx.coroutines.*
+import java.io.ByteArrayOutputStream
 
 class MainActivity : AppCompatActivity() {
 
@@ -62,10 +64,52 @@ class MainActivity : AppCompatActivity() {
     private var refreshRunnable:  Runnable? = null
     private var lastMessageCount  = 0
     private var lastAnnounceCount = 0
-    private val btService         = BluetoothService()
     private val scope             = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var myAddress         = ""
-    private var pendingImageBase64: String? = null  // set while image picked, cleared after send
+
+    // ── Service binding ───────────────────────────────────────────────────────
+
+    private var rnsService: RnsService? = null
+    private var serviceBound = false
+
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+            rnsService = (binder as RnsService.RnsBinder).getService()
+            serviceBound = true
+
+            // If RNS is already running (service survived rotation), restore UI
+            rnsService?.let { svc ->
+                if (svc.isRnsStarted) {
+                    myAddress = svc.myAddress
+                    tvMyAddress.text = "📋 My address: ${svc.myAddress}"
+                    toast("RNS already running")
+                    startPolling()
+                }
+            }
+
+            // Set callbacks for async results
+            rnsService?.onRnsStarted = { addr ->
+                runOnUiThread {
+                    myAddress = addr
+                    tvMyAddress.text = "📋 My address: $addr"
+                    btnConnect.isEnabled = true
+                    toast("Ready! Tap address to show QR")
+                    startPolling()
+                }
+            }
+            rnsService?.onRnsError = { error ->
+                runOnUiThread {
+                    toast(error)
+                    btnConnect.isEnabled = true
+                }
+            }
+        }
+
+        override fun onServiceDisconnected(name: ComponentName) {
+            serviceBound = false
+            rnsService = null
+        }
+    }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -83,13 +127,27 @@ class MainActivity : AppCompatActivity() {
         setupSettingsButton()
         setupAttachButton()
         requestPermissions()
+
+        // Start and bind to the foreground service
+        val serviceIntent = Intent(this, RnsService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
+        bindService(serviceIntent, serviceConnection, BIND_AUTO_CREATE)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         refreshRunnable?.let { handler.removeCallbacks(it) }
         scope.cancel()
-        btService.disconnect()
+        if (serviceBound) {
+            unbindService(serviceConnection)
+            serviceBound = false
+        }
+        // NOTE: We do NOT stop the service here — it keeps running in background
+        // so the radio stays alive for incoming link proofs
     }
 
     // ── View binding ──────────────────────────────────────────────────────────
@@ -125,11 +183,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupAddressBar() {
-        // Tap my address → show QR
         tvMyAddress.setOnClickListener {
             if (myAddress.isNotEmpty()) showQrDialog(myAddress)
         }
-        // Tap OR long-press dest field → same dialog: manual or scan QR
         val addressDialog = {
             AlertDialog.Builder(this)
                 .setTitle("Enter address")
@@ -174,7 +230,6 @@ class MainActivity : AppCompatActivity() {
         val cyan = colorStateList("#00d4ff")
         val dark = colorStateList("#0f3460")
 
-        // Reset all tabs to dark, hide all panels
         listOf(btnTabChat, btnTabAnnounces, btnTabContacts).forEach {
             it.backgroundTintList = dark
             it.setTextColor(Color.WHITE)
@@ -222,26 +277,10 @@ class MainActivity : AppCompatActivity() {
         btnConnect.setOnClickListener {
             val idx = spinnerDevices.selectedItemPosition
             if (idx < 0 || idx >= paired.size) return@setOnClickListener
+            val svc = rnsService ?: run { toast("Service not ready"); return@setOnClickListener }
             btnConnect.isEnabled = false
             toast("Connecting to ${paired[idx].address}...")
-            scope.launch { connectAndStart(paired[idx].address) }
-        }
-    }
-
-    private suspend fun connectAndStart(address: String) {
-        val connected = withContext(Dispatchers.IO) { btService.connect(address) }
-        if (!connected) {
-            toast("BT connection failed"); btnConnect.isEnabled = true; return
-        }
-        toast("BT connected. Starting RNS...")
-        val addr = withContext(Dispatchers.IO) { RNSBridge.start(btService) }
-        if (addr.startsWith("Error")) {
-            toast("RNS error: $addr"); btnConnect.isEnabled = true
-        } else {
-            myAddress = addr
-            tvMyAddress.text = "📋 My address: $addr"
-            toast("Ready! Tap address to show QR")
-            startPolling()
+            svc.connectAndStart(paired[idx].address)
         }
     }
 
@@ -266,7 +305,6 @@ class MainActivity : AppCompatActivity() {
             chatContainer.removeAllViews()
             messages.forEach { msg ->
                 val hash = msg["from"] ?: ""
-                // UI layer only: resolve hash → nickname, fall back to truncated hash
                 val displayName = if (msg["direction"] == "out") "me"
                                   else RNSBridge.resolveName(hash, hash.take(8))
                 addChatBubble(
@@ -289,20 +327,14 @@ class MainActivity : AppCompatActivity() {
             announces.reversed().forEach { ann ->
                 val hash    = ann["hash"] ?: ""
                 val rnsName = ann["name"] ?: ""
-                // Contact nickname takes priority over RNS announce name
                 val displayName = RNSBridge.resolveName(hash, rnsName)
                 addAnnounceCard(hash = hash, displayName = displayName, ts = ann["ts"] ?: "")
             }
         }
     }
 
-    /**
-     * Contacts tab: built from message history — every unique address
-     * that has ever sent or received a message on this device.
-     */
     private fun refreshContacts() {
         val messages = try { RNSBridge.getMessages() } catch (_: Exception) { return }
-        // Collect unique peer hashes from message history (exclude "me")
         val seen = linkedSetOf<String>()
         messages.forEach { msg ->
             val hash = msg["from"] ?: ""
@@ -382,7 +414,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildImageBubble(trimmed: String, isOutgoing: Boolean): View {
         return try {
-            // Support both IMG_B64: (LXMF attachments) and legacy IMG: prefix
             val b64 = when {
                 trimmed.startsWith("IMG_B64:") -> trimmed.removePrefix("IMG_B64:")
                 trimmed.startsWith("IMG:")     -> trimmed.removePrefix("IMG:")
@@ -393,14 +424,15 @@ class MainActivity : AppCompatActivity() {
             ImageView(this).apply {
                 setImageBitmap(bmp)
                 adjustViewBounds = true
-                layoutParams = LinearLayout.LayoutParams(300, LinearLayout.LayoutParams.WRAP_CONTENT)
-                    .also { it.gravity = if (isOutgoing) Gravity.END else Gravity.START }
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                layoutParams = LinearLayout.LayoutParams(
+                    resources.displayMetrics.widthPixels * 2 / 3,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).also { it.gravity = if (isOutgoing) Gravity.END else Gravity.START }
+                setPadding(4, 4, 4, 4)
             }
-        } catch (_: Exception) {
-            TextView(this).apply {
-                text = "[Image decode error]"
-                setTextColor(Color.RED)
-            }
+        } catch (e: Exception) {
+            buildTextBubble("[Image decode error: ${e.message}]", isOutgoing)
         }
     }
 
@@ -410,81 +442,76 @@ class MainActivity : AppCompatActivity() {
         val cleanHash = hash.replace("<", "").replace(">", "")
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(16, 12, 16, 12)
             setBackgroundColor(Color.parseColor("#0f3460"))
+            setPadding(16, 12, 16, 12)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).also { it.setMargins(0, 4, 0, 4) }
         }
         card.addView(TextView(this).apply {
-            text     = displayName.ifEmpty { "Unknown node" }
-            textSize = 14f
+            text = displayName.ifEmpty { cleanHash.take(16) }
+            textSize = 15f
             setTextColor(Color.WHITE)
+            typeface = Typeface.DEFAULT_BOLD
         })
         card.addView(TextView(this).apply {
-            text     = cleanHash
+            text = cleanHash
             textSize = 10f
             setTextColor(Color.parseColor("#00d4ff"))
             typeface = Typeface.MONOSPACE
         })
         card.addView(TextView(this).apply {
-            text     = "Seen at $ts"
-            textSize = 9f
+            text = "Seen at $ts"
+            textSize = 10f
             setTextColor(Color.GRAY)
         })
-        // Tap → load into chat
         card.setOnClickListener {
             etDestHash.setText(cleanHash)
             showTab("chat")
-            toast("Address loaded — type a message and tap Send")
         }
         announcesContainer.addView(card)
     }
 
-    // ── Contact cards (Contacts tab) ──────────────────────────────────────────
+    // ── Contact cards ─────────────────────────────────────────────────────────
 
     private fun addContactCard(hash: String) {
         val cleanHash = hash.replace("<", "").replace(">", "")
-        // Resolve current nickname — fall back to truncated hash
-        val nickname = RNSBridge.resolveName(cleanHash, "")
-        val displayName = nickname.ifEmpty { "${cleanHash.take(8)}…${cleanHash.takeLast(4)}" }
+        val nickname  = RNSBridge.resolveName(cleanHash, "")
 
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(16, 14, 16, 14)
             setBackgroundColor(Color.parseColor("#0f3460"))
-            gravity = Gravity.CENTER_VERTICAL
+            setPadding(16, 12, 16, 12)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).also { it.setMargins(0, 4, 0, 4) }
+            gravity = Gravity.CENTER_VERTICAL
         }
 
-        // Info column
-        val info = LinearLayout(this).apply {
+        card.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        info.addView(TextView(this).apply {
-            text     = displayName
-            textSize = 15f
-            setTextColor(Color.WHITE)
+            addView(TextView(this@MainActivity).apply {
+                text = nickname.ifEmpty { cleanHash.take(16) }
+                textSize = 15f
+                setTextColor(Color.WHITE)
+                typeface = Typeface.DEFAULT_BOLD
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = cleanHash
+                textSize = 10f
+                setTextColor(Color.parseColor("#00d4ff"))
+                typeface = Typeface.MONOSPACE
+            })
         })
-        info.addView(TextView(this).apply {
-            text     = "${cleanHash.take(8)}…${cleanHash.takeLast(4)}"
-            textSize = 10f
-            setTextColor(Color.parseColor("#00d4ff"))
-            typeface = Typeface.MONOSPACE
-        })
-        card.addView(info)
 
-        // Chat button
         card.addView(Button(this).apply {
-            text = "💬"
-            textSize = 16f
+            text = "Chat"
+            textSize = 12f
+            setTextColor(Color.WHITE)
             backgroundTintList = colorStateList("#00d4ff")
-            setTextColor(Color.parseColor("#1a1a2e"))
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -495,13 +522,11 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        // Tap card → load into chat
         card.setOnClickListener {
             etDestHash.setText(cleanHash)
             showTab("chat")
         }
 
-        // Long press card → contact card dialog to assign / edit nickname
         card.setOnLongClickListener {
             showContactCardDialog(cleanHash, nickname)
             true
@@ -512,11 +537,6 @@ class MainActivity : AppCompatActivity() {
 
     // ── Contact card dialog ───────────────────────────────────────────────────
 
-    /**
-     * Shows full address + nickname input.
-     * Saving updates the nickname used everywhere in the UI.
-     * Called from: long-press on a contact card in the Contacts tab.
-     */
     private fun showContactCardDialog(hash: String, currentNickname: String) {
         val cleanHash = hash.replace("<", "").replace(">", "")
 
@@ -525,7 +545,6 @@ class MainActivity : AppCompatActivity() {
             setPadding(48, 24, 48, 8)
         }
 
-        // Full address — always visible
         layout.addView(TextView(this).apply {
             text     = cleanHash
             textSize = 11f
@@ -543,8 +562,8 @@ class MainActivity : AppCompatActivity() {
         val input = EditText(this).apply {
             setText(currentNickname)
             hint = "e.g. Alice's RNode"
-            setTextColor(Color.parseColor("#1a1a2e"))      // dark text on white dialog background
-            setHintTextColor(Color.parseColor("#999999"))  // mid-grey hint, still readable
+            setTextColor(Color.parseColor("#1a1a2e"))
+            setHintTextColor(Color.parseColor("#999999"))
             setSingleLine(true)
         }
         layout.addView(input)
@@ -559,7 +578,6 @@ class MainActivity : AppCompatActivity() {
                     RNSBridge.saveContact(cleanHash, name)
                     withContext(Dispatchers.Main) {
                         toast("Saved: $name")
-                        // Force re-render everywhere so new name appears immediately
                         lastMessageCount  = 0
                         lastAnnounceCount = 0
                         refreshMessages()
@@ -630,20 +648,11 @@ class MainActivity : AppCompatActivity() {
         startActivityForResult(intent, REQ_IMAGE_GALLERY)
     }
 
-    /**
-     * Compress a bitmap for LoRa radio transmission.
-     * Mirrors Sideband's strategy exactly:
-     *   - Scale longest side to 320 px (thumbnail)
-     *   - Encode as WebP at quality 22 — far smaller than JPEG at same visual quality
-     *   - WebP on Android is supported natively from API 17+
-     *
-     * Typical output: 3–8 KB, well within LXMF link transfer budget.
-     */
-    private fun compressToBase64(bmp: android.graphics.Bitmap): String {
+    private fun compressToBase64(bmp: Bitmap): String {
         val maxDim = 320
         val scaled = if (bmp.width > maxDim || bmp.height > maxDim) {
             val ratio = maxDim.toFloat() / maxOf(bmp.width, bmp.height)
-            android.graphics.Bitmap.createScaledBitmap(
+            Bitmap.createScaledBitmap(
                 bmp,
                 (bmp.width * ratio).toInt(),
                 (bmp.height * ratio).toInt(),
@@ -652,14 +661,14 @@ class MainActivity : AppCompatActivity() {
         } else bmp
 
         val out = ByteArrayOutputStream()
-        scaled.compress(android.graphics.Bitmap.CompressFormat.WEBP, 22, out)
+        scaled.compress(Bitmap.CompressFormat.WEBP, 22, out)
         val bytes = out.toByteArray()
         val kb = bytes.size / 1024f
         android.util.Log.d("RNSHello", "Image compressed: ${kb.toInt()} KB (WebP q22 @ ${scaled.width}×${scaled.height})")
         return android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
     }
 
-    private fun handleImageResult(bmp: android.graphics.Bitmap) {
+    private fun handleImageResult(bmp: Bitmap) {
         val dest = etDestHash.text.toString().trim()
         if (dest.isEmpty()) { toast("No destination set"); return }
 
@@ -668,7 +677,6 @@ class MainActivity : AppCompatActivity() {
             val b64 = compressToBase64(bmp)
             val kb  = (b64.length * 3 / 4) / 1024
             withContext(Dispatchers.Main) {
-                // Show preview + confirm dialog
                 val preview = ImageView(this@MainActivity).apply {
                     val previewBytes = android.util.Base64.decode(b64, android.util.Base64.NO_WRAP)
                     setImageBitmap(BitmapFactory.decodeByteArray(previewBytes, 0, previewBytes.size))
@@ -677,14 +685,14 @@ class MainActivity : AppCompatActivity() {
                 }
                 AlertDialog.Builder(this@MainActivity)
                     .setTitle("Send image? (~${kb} KB — WebP)")
-                    .setMessage("Sending over LoRa takes 30–90 seconds. Keep both devices close and radio on.")
+                    .setMessage("Sending over LoRa may take 1–3 minutes. Keep both devices on.")
                     .setView(preview)
                     .setPositiveButton("📤 Send") { _, _ ->
                         scope.launch(Dispatchers.IO) {
                             val result = RNSBridge.sendImage(dest, b64)
                             withContext(Dispatchers.Main) {
                                 toast(result)
-                                if (result.startsWith("Image sent")) {
+                                if (result.startsWith("Sending")) {
                                     lastMessageCount = 0
                                     refreshMessages()
                                 }
@@ -729,13 +737,12 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        val etFreq  = addRow("Frequency (Hz)",    cfg["frequency"] ?: "433025000", "e.g. 433025000")
-        val etBw    = addRow("Bandwidth (Hz)",    cfg["bandwidth"]  ?: "31250",     "e.g. 31250")
-        val etTx    = addRow("TX Power (0–17 dBm)", cfg["txpower"] ?: "17",        "0–17")
-        val etSf    = addRow("Spreading Factor (6–12)", cfg["sf"]  ?: "8",         "6–12")
-        val etCr    = addRow("Coding Rate (5–8)",  cfg["cr"]        ?: "6",        "5–8  (4/5 to 4/8)")
+        val etFreq  = addRow("Frequency (Hz)",       cfg["frequency"] ?: "433025000", "e.g. 433025000")
+        val etBw    = addRow("Bandwidth (Hz)",        cfg["bandwidth"]  ?: "125000",   "e.g. 125000")
+        val etTx    = addRow("TX Power (0–17 dBm)",   cfg["txpower"]   ?: "17",        "0–17")
+        val etSf    = addRow("Spreading Factor (6–12)", cfg["sf"]      ?: "7",         "6–12")
+        val etCr    = addRow("Coding Rate (5–8)",     cfg["cr"]        ?: "6",         "5–8")
 
-        // Helper note
         layout.addView(TextView(this).apply {
             text     = "Changes apply on next Connect."
             textSize = 11f
@@ -810,12 +817,9 @@ class MainActivity : AppCompatActivity() {
                 toast("Address scanned!")
             }
             requestCode == REQ_IMAGE_CAMERA && resultCode == Activity.RESULT_OK -> {
-                val bmp = data?.extras?.get("data") as? android.graphics.Bitmap
-                if (bmp != null) {
-                    handleImageResult(bmp)
-                } else {
-                    toast("Could not get image from camera")
-                }
+                val bmp = data?.extras?.get("data") as? Bitmap
+                if (bmp != null) handleImageResult(bmp)
+                else toast("Could not get image from camera")
             }
             requestCode == REQ_IMAGE_GALLERY && resultCode == Activity.RESULT_OK -> {
                 val uri: Uri = data?.data ?: return
