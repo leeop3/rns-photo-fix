@@ -618,15 +618,6 @@ def send_message(dest_hash_hex, text):
         return f"Error: {e}"
 
 def send_image(dest_hash_hex, jpeg_b64):
-    """
-    Send an image using the 'ia' field key (standard LXMF image attachment).
-    jpeg_b64: base64-encoded WebP bytes (string), compressed by Kotlin side
-              to ~3-6 KB via WebP q22 @ 320px Ã¢â‚¬â€ mirrors Sideband's strategy.
-
-    Uses OPPORTUNISTIC method Ã¢â‚¬â€ auto-upgrades to link-based transfer if
-    payload exceeds single-packet limit. MAX_DELIVERY_ATTEMPTS patched to 20
-    at startup gives the LoRa link handshake enough retries to complete.
-    """
     import base64 as _b64
     global lxmf_router, destination, known_identities
     if not lxmf_router or not destination:
@@ -634,20 +625,13 @@ def send_image(dest_hash_hex, jpeg_b64):
     try:
         dest_hash_hex = dest_hash_hex.strip().strip("<>")
         dest_hash = bytes.fromhex(dest_hash_hex)
-
         with _data_lock:
             recalled_identity = known_identities.get(dest_hash_hex)
         if recalled_identity is None:
             recalled_identity = RNS.Identity.recall(dest_hash)
         if recalled_identity is None:
-            RNS.log("Identity missing for " + dest_hash_hex + ". Requesting path and waiting...")
             RNS.Transport.request_path(dest_hash)
-            # Give the network 2 seconds to find the path/identity
-            time.sleep(2.0)
-            recalled_identity = RNS.Identity.recall(dest_hash)
-            
-            return "Still no identity. Ask the other phone to tap Announce first."
-
+            return "Unknown destination - ask them to tap Announce first"
         lxmf_dest = RNS.Destination(
             recalled_identity,
             RNS.Destination.OUT,
@@ -658,66 +642,28 @@ def send_image(dest_hash_hex, jpeg_b64):
         actual_hash = RNS.prettyhexrep(lxmf_dest.hash).strip("<>")
         if actual_hash != dest_hash_hex:
             return f"Hash mismatch: got {actual_hash}. Try re-scanning their address."
-
         img_bytes = _b64.b64decode(jpeg_b64)
         kb = len(img_bytes) / 1024
-        RNS.log(f"Sending WebP image to {dest_hash_hex}: {kb:.1f} KB")
-
-        # Send ping first to warm up the link, then send image
-        ping = LXMF.LXMessage(
-            lxmf_dest,
-            destination,
-            ".",
-            title="",
-            desired_method=LXMF.LXMessage.OPPORTUNISTIC
-        )
-        lxmf_router.handle_outbound(ping)
-        RNS.log(f"Ping sent to {dest_hash_hex}, waiting for incoming link...")
-        # Wait up to 30s for the receiver to open a link back to us
-        for _ in range(30):
-            time.sleep(1)
-            with _data_lock:
-                if active_links.get(dest_hash_hex) and active_links[dest_hash_hex].status == RNS.Link.ACTIVE:
-                    RNS.log(f"Incoming link detected from {dest_hash_hex}, proceeding with image")
-                    break
-        else:
-            RNS.log(f"No incoming link after 30s, sending image anyway")
-        with _data_lock:
-            existing_link = active_links.get(dest_hash_hex)
+        RNS.log(f"Sending image to {dest_hash_hex}: {kb:.1f} KB")
         msg = LXMF.LXMessage(
             lxmf_dest,
             destination,
             "",
             title="",
-            desired_method=LXMF.LXMessage.OPPORTUNISTIC if RNS.Identity.current_ratchet_id(dest_hash) else LXMF.LXMessage.DIRECT,
-            fields={LXMF.FIELD_FILE_ATTACHMENTS: [["image.webp", img_bytes]]}
+            desired_method=LXMF.LXMessage.OPPORTUNISTIC,
+            fields={LXMF.FIELD_IMAGE: ["webp", img_bytes]}
         )
         msg.register_delivery_callback(lambda m: RNS.log(f"Image delivered! state={m.state}"))
         msg.register_failed_callback(lambda m: RNS.log(f"Image failed! state={m.state}"))
-        if existing_link and existing_link.status == RNS.Link.ACTIVE:
-            RNS.log(f"Link active, delivering image via link to {dest_hash_hex}")
-            try:
-                msg.set_delivery_via(existing_link)
-            except Exception as e:
-                RNS.log(f"set_delivery_via failed: {e}")
         lxmf_router.handle_outbound(msg)
-
         ts = time.strftime("%H:%M:%S")
         with _data_lock:
-            chat_messages.append({
-                "from": "me",
-                "text": f"IMG_B64:{jpeg_b64}",
-                "ts": ts,
-                "direction": "out"
-            })
-        size_str = f"{kb:.1f} KB"
-        return f"Sending image ({size_str}) Ã¢â‚¬â€ may take 30Ã¢â‚¬â€œ90s over LoRa"
-
+            chat_messages.append({"from": "me", "text": f"IMG_B64:{jpeg_b64}", "ts": ts, "direction": "out"})
+        return f"Sending image ({kb:.1f} KB) - may take several minutes over LoRa"
     except Exception as e:
         import traceback
         RNS.log(f"send_image error: {traceback.format_exc()}")
         return f"Error: {e}"
-
 
 def get_messages():
     with _data_lock:
