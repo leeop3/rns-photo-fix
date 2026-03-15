@@ -482,8 +482,8 @@ def _rns_main(bt_socket_wrapper):
         # Patch class constants for LoRa reliability
         try:
             LXMF.LXMRouter.MAX_DELIVERY_ATTEMPTS = 20
-            RNS.Link.ESTABLISHMENT_TIMEOUT = 45
-            RNS.log("Patched MAX_DELIVERY_ATTEMPTS=20 and ESTABLISHMENT_TIMEOUT=45s")
+            RNS.Link.TIMEOUT_PER_HOP = 45
+            RNS.log("Patched MAX_DELIVERY_ATTEMPTS=20 and TIMEOUT_PER_HOP=45s")
         except Exception as e:
             RNS.log(f"Could not patch constants: {e}")
         destination = lxmf_router.register_delivery_identity(
