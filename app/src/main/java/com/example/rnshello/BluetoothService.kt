@@ -5,7 +5,7 @@ import android.bluetooth.BluetoothSocket
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.InputStream
+import java.io.BufferedInputStream
 import java.io.OutputStream
 import java.util.UUID
 
@@ -14,8 +14,10 @@ private const val TAG = "BluetoothService"
 
 class BluetoothService {
     private var socket: BluetoothSocket? = null
-    @Volatile var inputStream: InputStream? = null
-    @Volatile var outputStream: OutputStream? = null
+
+    // Use BufferedInputStream like Sideband does — avoids partial reads
+    @Volatile private var bufferedInput: BufferedInputStream? = null
+    @Volatile private var outputStream: OutputStream? = null
 
     @Volatile private var deviceAddress: String? = null
     @Volatile private var isConnected = false
@@ -35,7 +37,8 @@ class BluetoothService {
             adapter.cancelDiscovery()
             s.connect()
             socket = s
-            inputStream = s.inputStream
+            // Wrap with BufferedInputStream (1024 byte buffer) — same as Sideband
+            bufferedInput = BufferedInputStream(s.inputStream, 1024)
             outputStream = s.outputStream
             isConnected = true
             Log.i(TAG, "BT connected to $address")
@@ -69,16 +72,25 @@ class BluetoothService {
         }.also { it.isDaemon = true }.start()
     }
 
+    // Non-blocking read — only reads what's available, like Sideband
     fun read(maxBytes: Int): ByteArray {
         return try {
-            val buf = ByteArray(maxBytes)
-            val n = inputStream?.read(buf) ?: -1
-            if (n <= 0) {
-                Log.w(TAG, "BT read returned $n")
-                triggerReconnect()
-                ByteArray(0)
+            val input = bufferedInput ?: return ByteArray(0)
+            val available = input.available()
+            if (available > 0) {
+                val toRead = minOf(available, maxBytes)
+                val buf = ByteArray(toRead)
+                val n = input.read(buf, 0, toRead)
+                if (n <= 0) {
+                    Log.w(TAG, "BT read returned $n despite $available available")
+                    ByteArray(0)
+                } else {
+                    buf.copyOf(n)
+                }
             } else {
-                buf.copyOf(n)
+                // Nothing available — sleep briefly to avoid busy-looping
+                Thread.sleep(10)
+                ByteArray(0)
             }
         } catch (e: Exception) {
             Log.w(TAG, "BT read error: ${e.message}")
@@ -95,11 +107,11 @@ class BluetoothService {
         }
         try {
             outputStream?.write(data)
-            outputStream?.flush()
+            outputStream?.flush()  // flush after every write like Sideband
         } catch (e: Exception) {
             Log.w(TAG, "BT write error: ${e.message}")
             triggerReconnect()
-            throw e  // let Python layer log it, don't block here
+            throw e
         }
     }
 
@@ -107,5 +119,7 @@ class BluetoothService {
         deviceAddress = null
         isConnected = false
         try { socket?.close() } catch (_: Exception) {}
+        bufferedInput = null
+        outputStream = null
     }
 }
