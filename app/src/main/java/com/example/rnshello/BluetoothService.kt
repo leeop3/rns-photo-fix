@@ -95,6 +95,7 @@ class BluetoothService {
         }
         try {
             outputStream?.write(data)
+            outputStream?.flush()
         } catch (e: Exception) {
             Log.w(TAG, "BT write error: ${e.message}")
             triggerReconnect()
