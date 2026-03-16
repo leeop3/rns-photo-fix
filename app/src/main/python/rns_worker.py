@@ -479,7 +479,8 @@ def _rns_main(bt_socket_wrapper):
         try:
             for dest_hash, dest_obj in lxmf_router.delivery_destinations.items():
                 dest_obj.set_link_established_callback(incoming_link_established)
-                RNS.log(f"Link callback set on {RNS.prettyhexrep(dest_hash)}")
+                dest_obj.set_proof_strategy(RNS.Destination.PROVE_ALL)
+                RNS.log(f"Link callback+proof set on {RNS.prettyhexrep(dest_hash)}")
         except Exception as e:
             RNS.log(f"Could not set link callback: {e}")
         lxmf_router.register_delivery_callback(message_received)
