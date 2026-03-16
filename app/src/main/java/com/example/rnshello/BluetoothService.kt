@@ -97,6 +97,10 @@ class BluetoothService {
         }
         try {
             Log.d(TAG, "BT write: ${data.size} bytes")
+            if (data.size in 83..95) {
+                Log.d(TAG, "Delaying link proof ${data.size}b for radio turnaround")
+                Thread.sleep(2000)
+            }
             outputStream?.write(data)
             outputStream?.flush()
         } catch (e: Exception) {
