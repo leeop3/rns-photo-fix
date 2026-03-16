@@ -183,8 +183,8 @@ class AndroidBTInterface(Interface):
                     self._kiss_buf.append(byte)
     def process_outgoing(self, data):
         try:
+            RNS.log(f"process_outgoing: {len(data)} bytes")
             if len(data) == 83:
-                RNS.log(f"Delaying proof packet for radio turnaround")
                 time.sleep(2.0)
             self._socket.write(kiss_cmd(CMD_DATA, data))
             self.txb += len(data)
