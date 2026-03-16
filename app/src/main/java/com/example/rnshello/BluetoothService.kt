@@ -96,6 +96,7 @@ class BluetoothService {
             throw Exception("BT not connected, reconnecting...")
         }
         try {
+            Log.d(TAG, "BT write: ${data.size} bytes")
             outputStream?.write(data)
             outputStream?.flush()
         } catch (e: Exception) {
