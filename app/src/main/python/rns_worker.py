@@ -184,7 +184,7 @@ class AndroidBTInterface(Interface):
     def process_outgoing(self, data):
         try:
             RNS.log(f"process_outgoing: {len(data)} bytes")
-            if len(data) == 83:
+            if len(data) == 118:
                 time.sleep(2.0)
             self._socket.write(kiss_cmd(CMD_DATA, data))
             self.txb += len(data)
