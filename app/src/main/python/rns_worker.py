@@ -432,26 +432,16 @@ def _rns_main(bt_socket_wrapper):
     global destination, lxmf_router, reticulum
     try:
         configure_rnode(bt_socket_wrapper)
-
         configdir = "/data/data/com.example.rnshello/files/.reticulum"
         os.makedirs(configdir, exist_ok=True)
         with open(os.path.join(configdir, "config"), "w") as f:
             f.write(RNS_CONFIG)
-
-        # Suppress signal() calls Ã¢â‚¬â€ we're on a background thread, not main
         original_signal = signal.signal
         signal.signal = _noop_signal
-
-        # FIX: init Reticulum FIRST, then attach interface
-        # Previously the interface was appended before RNS.Reticulum() was
-        # called, which risked Transport reinitialising and orphaning the
-        # interface so inbound packets went nowhere.
         reticulum = RNS.Reticulum(configdir=configdir, loglevel=RNS.LOG_DEBUG)
-
         iface = AndroidBTInterface(RNS.Transport, "RNodeBT", bt_socket_wrapper)
         RNS.Transport.interfaces.append(iface)
         RNS.log(f"AndroidBTInterface attached. Transport interfaces: {[i.name for i in RNS.Transport.interfaces]}")
-
         files_dir = "/data/data/com.example.rnshello/files"
         os.makedirs(files_dir, exist_ok=True)
         identity_path = os.path.join(files_dir, "identity")
@@ -473,14 +463,8 @@ def _rns_main(bt_socket_wrapper):
                 RNS.log(f"Saved new identity: {RNS.prettyhexrep(identity.hash)}")
             except Exception as se:
                 RNS.log(f"Identity save error: {se}")
-
-        # LXMRouter also calls signal.signal internally Ã¢â‚¬â€ keep noop active through init
-        lxmf_router = LXMF.LXMRouter(storagepath="/data/data/com.example.rnshello/files/lxmf",
-            autopeer=True
-        )
+        lxmf_router = LXMF.LXMRouter(storagepath="/data/data/com.example.rnshello/files/lxmf", autopeer=True)
         signal.signal = original_signal
-        # LoRa link handshake needs more attempts than the default 5.
-        # Patch class constants for LoRa reliability
         try:
             LXMF.LXMRouter.MAX_DELIVERY_ATTEMPTS = 20
             RNS.Link.TIMEOUT_PER_HOP = 45
@@ -491,24 +475,20 @@ def _rns_main(bt_socket_wrapper):
             identity,
             display_name="RNS Hello Android"
         )
+        destination.set_proof_strategy(RNS.Destination.PROVE_ALL)
         try:
-            # Find the internal IN destination the LXMF router uses
-            import inspect
-            for name, val in inspect.getmembers(lxmf_router):
-                if isinstance(val, RNS.Destination) and hasattr(val, "type") and val.type == RNS.Destination.IN:
-                    RNS.log(f"Found IN dest: {name} hash={RNS.prettyhexrep(val.hash)}")
-                    val.set_link_established_callback(incoming_link_established)
-                    RNS.log(f"Link callback set on lxmf_router.{name}")
+            attrs = [a for a in dir(lxmf_router) if not a.startswith("__")]
+            RNS.log(f"lxmf_router attrs: {attrs}")
         except Exception as e:
-            RNS.log(f"Could not set link callback: {e}")
+            RNS.log(f"Could not inspect lxmf_router: {e}")
         lxmf_router.register_delivery_callback(message_received)
         RNS.Transport.register_announce_handler(AnnounceHandler())
         RNS.Transport.register_announce_handler(RawAnnounceHandler())
+        destination.announce()
+        addr = RNS.prettyhexrep(destination.hash).strip("<>")
+        RNS.log(f"LXMF address announced: {addr}")
         _start_result["addr"] = addr
-
-        # FIX: start periodic re-announce loop (daemon thread, won't block shutdown)
         threading.Thread(target=_startup_announce_loop, daemon=True).start()
-
     except Exception as e:
         import traceback
         RNS.log(f"RNS start error: {e}\n{traceback.format_exc()}")
