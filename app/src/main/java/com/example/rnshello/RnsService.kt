@@ -63,6 +63,12 @@ class RnsService : Service() {
 
     // ── Connect + start RNS ────────────────────────────────────────────────────
 
+    fun stopAndDisconnect() {
+        btService.disconnect()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     fun connectAndStart(address: String) {
         scope.launch {
             val connected = withContext(Dispatchers.IO) { btService.connect(address) }

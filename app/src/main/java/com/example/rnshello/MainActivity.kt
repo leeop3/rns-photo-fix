@@ -282,6 +282,14 @@ class MainActivity : AppCompatActivity() {
             toast("Connecting to ${paired[idx].address}...")
             svc.connectAndStart(paired[idx].address)
         }
+        btnConnect.setOnLongClickListener {
+            rnsService?.stopAndDisconnect()
+            btnConnect.isEnabled = true
+            tvMyAddress.text = "Tap Connect to start"
+            refreshRunnable?.let { handler.removeCallbacks(it) }
+            toast("Disconnected")
+            true
+        }
     }
 
     // ── Polling ───────────────────────────────────────────────────────────────
