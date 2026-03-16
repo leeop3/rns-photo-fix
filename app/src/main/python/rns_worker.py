@@ -475,15 +475,15 @@ def _rns_main(bt_socket_wrapper):
             identity,
             display_name="RNS Hello Android"
         )
-        destination.set_proof_strategy(RNS.Destination.PROVE_ALL)
         try:
-            attrs = [a for a in dir(lxmf_router) if not a.startswith("__")]
-            RNS.log(f"lxmf_router attrs: {attrs}")
+            lxmf_router.lxmf_delivery.set_link_established_callback(incoming_link_established)
+            RNS.log(f"Link callback set on lxmf_router.lxmf_delivery hash={RNS.prettyhexrep(lxmf_router.lxmf_delivery.hash)}")
         except Exception as e:
-            RNS.log(f"Could not inspect lxmf_router: {e}")
+            RNS.log(f"Could not set link callback on lxmf_delivery: {e}")
         lxmf_router.register_delivery_callback(message_received)
         RNS.Transport.register_announce_handler(AnnounceHandler())
         RNS.Transport.register_announce_handler(RawAnnounceHandler())
+        
         destination.announce()
         addr = RNS.prettyhexrep(destination.hash).strip("<>")
         RNS.log(f"LXMF address announced: {addr}")
