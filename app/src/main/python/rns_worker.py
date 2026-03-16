@@ -464,12 +464,12 @@ def _rns_main(bt_socket_wrapper):
             except Exception as se:
                 RNS.log(f"Identity save error: {se}")
         lxmf_router = LXMF.LXMRouter(storagepath="/data/data/com.example.rnshello/files/lxmf", autopeer=True)
-        signal.signal = original_signal
+        lxmf_router = LXMF.LXMRouter(storagepath="/data/data/com.example.rnshello/files/lxmf", autopeer=True)
         try:
-            LXMF.LXMRouter.MAX_DELIVERY_ATTEMPTS = 20
-            RNS.Link.TIMEOUT_PER_HOP = 45
-            RNS.log("Patched MAX_DELIVERY_ATTEMPTS=20 and TIMEOUT_PER_HOP=45s")
+            lxmf_router.set_max_accepted_resource_size(2*1024*1024)
+            RNS.log("Set max resource size to 2MB")
         except Exception as e:
+            RNS.log(f"Could not set resource size: {e}")
             RNS.log(f"Could not patch constants: {e}")
         destination = lxmf_router.register_delivery_identity(
             identity,
