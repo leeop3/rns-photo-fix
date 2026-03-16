@@ -163,7 +163,7 @@ class AndroidBTInterface(Interface):
                         RNS.log(f"RX KISS port=0x{port:02x} len={len(pkt)}")
                         if port == CMD_DATA:
                             try:
-                                RNS.log(f"Passing {len(pkt)} byte packet to RNS inbound, first byte: 0x{pkt[0]:02x}")
+                                RNS.log(f"PKT type=0x{pkt[0]:02x} len={len(pkt)} dest={pkt[2:18].hex() if len(pkt)>18 else None}")
                                 self.owner.inbound(pkt, self)
                             except Exception as e:
                                 RNS.log(f"inbound error: {e}")
