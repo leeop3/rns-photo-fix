@@ -492,6 +492,10 @@ def _rns_main(bt_socket_wrapper):
             display_name="RNS Hello Android"
         )
         try:
+            for attr in ["destination", "lxmf_destination", "_destination", "delivery_destination"]:
+                if hasattr(lxmf_router, attr):
+                    d = getattr(lxmf_router, attr)
+                    RNS.log(f"lxmf_router.{attr} = {type(d).__name__} hash={RNS.prettyhexrep(d.hash) if hasattr(d, chr(104)+chr(97)+chr(115)+chr(104)) else None}")
             rns_dest = destination.destination if hasattr(destination, "destination") else destination
             rns_dest.set_link_established_callback(incoming_link_established)
             RNS.log(f"Link callback set on {type(rns_dest).__name__} hash={RNS.prettyhexrep(rns_dest.hash)}")
@@ -500,10 +504,6 @@ def _rns_main(bt_socket_wrapper):
         lxmf_router.register_delivery_callback(message_received)
         RNS.Transport.register_announce_handler(AnnounceHandler())
         RNS.Transport.register_announce_handler(RawAnnounceHandler())
-        # Initial announce
-        destination.announce()
-        addr = RNS.prettyhexrep(destination.hash).strip("<>")
-        RNS.log(f"LXMF address announced: {addr}")
         _start_result["addr"] = addr
 
         # FIX: start periodic re-announce loop (daemon thread, won't block shutdown)
