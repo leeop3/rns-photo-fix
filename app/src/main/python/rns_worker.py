@@ -183,17 +183,17 @@ class AndroidBTInterface(Interface):
                     self._kiss_buf.append(byte)
 
     def process_outgoing(self, data):
+    def process_outgoing(self, data):
         try:
+            # Add delay before sending link proofs (83 bytes) to allow
+            # the other radio to switch from TX to RX mode first
+            if len(data) == 83:
+                RNS.log(f"Delaying proof packet {len(data)}b for radio turnaround")
+                time.sleep(2.0)
             self._socket.write(kiss_cmd(CMD_DATA, data))
             self.txb += len(data)
         except Exception as e:
             RNS.log(f"BT write error: {e}")
-
-def message_received(message):
-    import base64 as _b64
-    sender = RNS.prettyhexrep(message.source_hash).strip("<>")
-    ts = time.strftime("%H:%M:%S")
-
     # Ã¢â€â‚¬Ã¢â€â‚¬ Check for image field first (Sideband-compatible) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     # 'ia' is the standard image field key in LXMF
     # Format: [format_string, raw_bytes]  e.g. ["jpg", b"..."]
