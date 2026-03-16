@@ -15,7 +15,7 @@ private const val TAG = "BluetoothService"
 class BluetoothService {
     private var socket: BluetoothSocket? = null
 
-    // Use BufferedInputStream like Sideband does — avoids partial reads
+    // BufferedInputStream like Sideband — 1024 byte buffer
     @Volatile private var bufferedInput: BufferedInputStream? = null
     @Volatile private var outputStream: OutputStream? = null
 
@@ -37,7 +37,6 @@ class BluetoothService {
             adapter.cancelDiscovery()
             s.connect()
             socket = s
-            // Wrap with BufferedInputStream (1024 byte buffer) — same as Sideband
             bufferedInput = BufferedInputStream(s.inputStream, 1024)
             outputStream = s.outputStream
             isConnected = true
@@ -50,7 +49,6 @@ class BluetoothService {
         }
     }
 
-    // Reconnect runs fully async — never blocks the caller
     private fun triggerReconnect() {
         if (reconnecting) return
         reconnecting = true
@@ -72,25 +70,18 @@ class BluetoothService {
         }.also { it.isDaemon = true }.start()
     }
 
-    // Non-blocking read — only reads what's available, like Sideband
+    // Blocking read using BufferedInputStream
     fun read(maxBytes: Int): ByteArray {
         return try {
             val input = bufferedInput ?: return ByteArray(0)
-            val available = input.available()
-            if (available > 0) {
-                val toRead = minOf(available, maxBytes)
-                val buf = ByteArray(toRead)
-                val n = input.read(buf, 0, toRead)
-                if (n <= 0) {
-                    Log.w(TAG, "BT read returned $n despite $available available")
-                    ByteArray(0)
-                } else {
-                    buf.copyOf(n)
-                }
-            } else {
-                // Nothing available — sleep briefly to avoid busy-looping
-                Thread.sleep(10)
+            val buf = ByteArray(maxBytes)
+            val n = input.read(buf)
+            if (n <= 0) {
+                Log.w(TAG, "BT read returned $n")
+                triggerReconnect()
                 ByteArray(0)
+            } else {
+                buf.copyOf(n)
             }
         } catch (e: Exception) {
             Log.w(TAG, "BT read error: ${e.message}")
@@ -99,7 +90,6 @@ class BluetoothService {
         }
     }
 
-    // write() NEVER blocks for reconnect — just throws so Python logs it and moves on
     fun write(data: ByteArray) {
         if (!isConnected) {
             triggerReconnect()
@@ -107,7 +97,7 @@ class BluetoothService {
         }
         try {
             outputStream?.write(data)
-            outputStream?.flush()  // flush after every write like Sideband
+            outputStream?.flush()
         } catch (e: Exception) {
             Log.w(TAG, "BT write error: ${e.message}")
             triggerReconnect()
