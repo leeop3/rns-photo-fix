@@ -476,14 +476,14 @@ def _rns_main(bt_socket_wrapper):
             display_name="RNS Hello Android"
         )
         try:
-            lxmf_router.lxmf_delivery.set_link_established_callback(incoming_link_established)
-            RNS.log(f"Link callback set on lxmf_router.lxmf_delivery hash={RNS.prettyhexrep(lxmf_router.lxmf_delivery.hash)}")
+            for dest_hash, dest_obj in lxmf_router.delivery_destinations.items():
+                dest_obj.set_link_established_callback(incoming_link_established)
+                RNS.log(f"Link callback set on delivery_destination {RNS.prettyhexrep(dest_hash)}")
         except Exception as e:
-            RNS.log(f"Could not set link callback on lxmf_delivery: {e}")
+            RNS.log(f"Could not set link callback: {e}")
         lxmf_router.register_delivery_callback(message_received)
         RNS.Transport.register_announce_handler(AnnounceHandler())
         RNS.Transport.register_announce_handler(RawAnnounceHandler())
-        
         destination.announce()
         addr = RNS.prettyhexrep(destination.hash).strip("<>")
         RNS.log(f"LXMF address announced: {addr}")
