@@ -492,13 +492,13 @@ def _rns_main(bt_socket_wrapper):
             display_name="RNS Hello Android"
         )
         try:
-            for attr in ["destination", "lxmf_destination", "_destination", "delivery_destination"]:
-                if hasattr(lxmf_router, attr):
-                    d = getattr(lxmf_router, attr)
-                    RNS.log(f"lxmf_router.{attr} = {type(d).__name__} hash={RNS.prettyhexrep(d.hash) if hasattr(d, chr(104)+chr(97)+chr(115)+chr(104)) else None}")
-            rns_dest = destination.destination if hasattr(destination, "destination") else destination
-            rns_dest.set_link_established_callback(incoming_link_established)
-            RNS.log(f"Link callback set on {type(rns_dest).__name__} hash={RNS.prettyhexrep(rns_dest.hash)}")
+            # Find the internal IN destination the LXMF router uses
+            import inspect
+            for name, val in inspect.getmembers(lxmf_router):
+                if isinstance(val, RNS.Destination) and hasattr(val, "type") and val.type == RNS.Destination.IN:
+                    RNS.log(f"Found IN dest: {name} hash={RNS.prettyhexrep(val.hash)}")
+                    val.set_link_established_callback(incoming_link_established)
+                    RNS.log(f"Link callback set on lxmf_router.{name}")
         except Exception as e:
             RNS.log(f"Could not set link callback: {e}")
         lxmf_router.register_delivery_callback(message_received)
