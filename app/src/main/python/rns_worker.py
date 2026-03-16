@@ -624,12 +624,37 @@ def send_image(dest_hash_hex, jpeg_b64):
         img_bytes = _b64.b64decode(jpeg_b64)
         kb = len(img_bytes) / 1024
         RNS.log(f"Sending image to {dest_hash_hex}: {kb:.1f} KB")
+        # Check if delivery link is already available from the other phone
+        link_available = lxmf_router.delivery_link_available(dest_hash)
+        RNS.log(f"Delivery link available: {link_available}")
+        if not link_available:
+            # Send a small text to trigger the other phone to open a link to us
+            RNS.log(f"No link available, sending ping to trigger link from other side...")
+            ping = LXMF.LXMessage(
+                lxmf_dest,
+                destination,
+                ".",
+                title="",
+                desired_method=LXMF.LXMessage.OPPORTUNISTIC
+            )
+            lxmf_router.handle_outbound(ping)
+            # Wait up to 30s for the other phone to open a link back to us
+            for _ in range(30):
+                time.sleep(1)
+                if lxmf_router.delivery_link_available(dest_hash):
+                    RNS.log(f"Link now available after ping")
+                    break
+            else:
+                RNS.log(f"No link after 30s, sending image anyway")
+        # Use DIRECT if link available, OPPORTUNISTIC otherwise
+        method = LXMF.LXMessage.DIRECT if lxmf_router.delivery_link_available(dest_hash) else LXMF.LXMessage.OPPORTUNISTIC
+        RNS.log(f"Sending image using method: {method}")
         msg = LXMF.LXMessage(
             lxmf_dest,
             destination,
             "",
             title="",
-            desired_method=LXMF.LXMessage.OPPORTUNISTIC,
+            desired_method=method,
             fields={LXMF.FIELD_IMAGE: ["webp", img_bytes]}
         )
         msg.register_delivery_callback(lambda m: RNS.log(f"Image delivered! state={m.state}"))
