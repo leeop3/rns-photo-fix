@@ -181,19 +181,19 @@ class AndroidBTInterface(Interface):
                         self._kiss_buf.append(KISS_FESC)
                 else:
                     self._kiss_buf.append(byte)
-
-    def process_outgoing(self, data):
     def process_outgoing(self, data):
         try:
-            # Add delay before sending link proofs (83 bytes) to allow
-            # the other radio to switch from TX to RX mode first
             if len(data) == 83:
-                RNS.log(f"Delaying proof packet {len(data)}b for radio turnaround")
+                RNS.log(f"Delaying proof packet for radio turnaround")
                 time.sleep(2.0)
             self._socket.write(kiss_cmd(CMD_DATA, data))
             self.txb += len(data)
         except Exception as e:
             RNS.log(f"BT write error: {e}")
+def message_received(message):
+    import base64 as _b64
+    sender = RNS.prettyhexrep(message.source_hash).strip("<>")
+    ts = time.strftime("%H:%M:%S")
     # Ã¢â€â‚¬Ã¢â€â‚¬ Check for image field first (Sideband-compatible) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     # 'ia' is the standard image field key in LXMF
     # Format: [format_string, raw_bytes]  e.g. ["jpg", b"..."]
@@ -624,37 +624,12 @@ def send_image(dest_hash_hex, jpeg_b64):
         img_bytes = _b64.b64decode(jpeg_b64)
         kb = len(img_bytes) / 1024
         RNS.log(f"Sending image to {dest_hash_hex}: {kb:.1f} KB")
-        # Check if delivery link is already available from the other phone
-        link_available = lxmf_router.delivery_link_available(dest_hash)
-        RNS.log(f"Delivery link available: {link_available}")
-        if not link_available:
-            # Send a small text to trigger the other phone to open a link to us
-            RNS.log(f"No link available, sending ping to trigger link from other side...")
-            ping = LXMF.LXMessage(
-                lxmf_dest,
-                destination,
-                ".",
-                title="",
-                desired_method=LXMF.LXMessage.OPPORTUNISTIC
-            )
-            lxmf_router.handle_outbound(ping)
-            # Wait up to 30s for the other phone to open a link back to us
-            for _ in range(30):
-                time.sleep(1)
-                if lxmf_router.delivery_link_available(dest_hash):
-                    RNS.log(f"Link now available after ping")
-                    break
-            else:
-                RNS.log(f"No link after 30s, sending image anyway")
-        # Use DIRECT if link available, OPPORTUNISTIC otherwise
-        method = LXMF.LXMessage.DIRECT if lxmf_router.delivery_link_available(dest_hash) else LXMF.LXMessage.OPPORTUNISTIC
-        RNS.log(f"Sending image using method: {method}")
         msg = LXMF.LXMessage(
             lxmf_dest,
             destination,
             "",
             title="",
-            desired_method=method,
+            desired_method=LXMF.LXMessage.OPPORTUNISTIC,
             fields={LXMF.FIELD_IMAGE: ["webp", img_bytes]}
         )
         msg.register_delivery_callback(lambda m: RNS.log(f"Image delivered! state={m.state}"))
