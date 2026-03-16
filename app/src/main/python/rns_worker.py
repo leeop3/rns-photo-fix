@@ -184,14 +184,14 @@ class AndroidBTInterface(Interface):
     def process_outgoing(self, data):
         try:
             RNS.log(f"process_outgoing: {len(data)} bytes")
-            if len(data) == 118:
+            if len(data) in (89, 91, 118, 124):
+                RNS.log(f"Delaying {len(data)}b packet")
                 time.sleep(2.0)
             self._socket.write(kiss_cmd(CMD_DATA, data))
             self.txb += len(data)
         except Exception as e:
             RNS.log(f"BT write error: {e}")
 def message_received(message):
-    import base64 as _b64
     sender = RNS.prettyhexrep(message.source_hash).strip("<>")
     ts = time.strftime("%H:%M:%S")
     # Ã¢â€â‚¬Ã¢â€â‚¬ Check for image field first (Sideband-compatible) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
