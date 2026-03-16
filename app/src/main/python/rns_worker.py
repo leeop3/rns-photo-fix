@@ -98,9 +98,9 @@ def configure_rnode(socket):
     RNS.log("RNode radio configured and ON")
 
 class AndroidBTInterface(Interface):
-    BITRATE_GUESS = 1200
-
+    BITRATE_GUESS = 64000
     def __init__(self, owner, name, socket):
+        super().__init__()
         super().__init__()
         self.owner                  = owner
         self.name                   = name
@@ -136,8 +136,8 @@ class AndroidBTInterface(Interface):
         self.announce_allowed_at    = 0.0
         self.announce_time          = None
         self.stamp_cost             = None
-        self.online                 = True
-        self._kiss_buf              = []
+        self.stamp_cost             = None
+        self.mtu                    = 500
         self._in_frame              = False
         self._escape                = False
         threading.Thread(target=self._read_loop, daemon=True).start()
@@ -184,10 +184,10 @@ class AndroidBTInterface(Interface):
     def process_outgoing(self, data):
         try:
             RNS.log(f"process_outgoing: {len(data)} bytes")
-            if len(data) in (89, 91, 118, 124):
-                RNS.log(f"Delaying {len(data)}b packet")
-                time.sleep(2.0)
             self._socket.write(kiss_cmd(CMD_DATA, data))
+            self.txb += len(data)
+        except Exception as e:
+            RNS.log(f"BT write error: {e}")
             self.txb += len(data)
         except Exception as e:
             RNS.log(f"BT write error: {e}")
