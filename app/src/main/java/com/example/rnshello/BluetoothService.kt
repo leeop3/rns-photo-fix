@@ -15,7 +15,6 @@ private const val TAG = "BluetoothService"
 class BluetoothService {
     private var socket: BluetoothSocket? = null
 
-    // BufferedInputStream like Sideband — 1024 byte buffer
     @Volatile private var bufferedInput: BufferedInputStream? = null
     @Volatile private var outputStream: OutputStream? = null
 
@@ -70,18 +69,20 @@ class BluetoothService {
         }.also { it.isDaemon = true }.start()
     }
 
-    // Blocking read using BufferedInputStream
+    // Non-blocking read like Sideband's available() approach
     fun read(maxBytes: Int): ByteArray {
         return try {
             val input = bufferedInput ?: return ByteArray(0)
-            val buf = ByteArray(maxBytes)
-            val n = input.read(buf)
-            if (n <= 0) {
-                Log.w(TAG, "BT read returned $n")
-                triggerReconnect()
-                ByteArray(0)
+            val available = input.available()
+            if (available > 0) {
+                val toRead = minOf(available, maxBytes)
+                val buf = ByteArray(toRead)
+                val n = input.read(buf, 0, toRead)
+                if (n > 0) buf.copyOf(n) else ByteArray(0)
             } else {
-                buf.copyOf(n)
+                // Nothing available — sleep briefly to avoid busy-loop
+                Thread.sleep(5)
+                ByteArray(0)
             }
         } catch (e: Exception) {
             Log.w(TAG, "BT read error: ${e.message}")
